@@ -157,10 +157,12 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
   after 2026-11-12 19:07 UTC, open `https://me.lemonade.com/` in the same browser and note whether
   it is still logged in.
 
-- **Anti-bot:** none of the common bot-manager cookies seen (Akamai `_abck`/`bm_sz`, HUMAN `_px*`,
-  Cloudflare `__cf_bm`, DataDome, Imperva `incap_ses_*`/`reese84`, Kasada). Other cookies were
-  analytics and advertising (e.g. Taboola). Not proof of no detection; the real login from Render
-  settles it.
+- **Anti-bot:** a `datadome` cookie was seen on domain `.taboola.com` (expires 2027-08-05). That
+  is Taboola, an ad network embedded in Lemonade's pages, protecting its own servers with
+  DataDome; it does not by itself mean Lemonade uses DataDome. To check: a `datadome` cookie on a
+  `lemonade.com` domain, or Lemonade's own page loading `js.datadome.co` / `api-js.datadome.co`.
+  No other common bot-manager cookies were seen (Akamai `_abck`/`bm_sz`, HUMAN `_px*`, Cloudflare
+  `__cf_bm`, Imperva `incap_ses_*`/`reese84`, Kasada). The real login from Render settles it.
 
 **D1 for Lemonade:** no page navigation needed after login. Call the policies API from inside the
 logged-in page, then fetch each `form_url` and stream the PDF. Two requests to the first document,
