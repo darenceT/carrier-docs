@@ -1,0 +1,69 @@
+/* Deliberately plain. Works at phone width. */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  line-height: 1.4;
+}
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
+}
+label {
+  display: block;
+  margin: 0.75rem 0;
+}
+input,
+select,
+button {
+  font: inherit;
+}
+input,
+select {
+  display: block;
+  width: 100%;
+  padding: 0.4rem;
+}
+button {
+  padding: 0.4rem 0.8rem;
+}
+.error {
+  color: #b00020;
+}
+.note {
+  color: #555;
+}
+.headline {
+  font-size: 1.4rem;
+  font-weight: bold;
+}
+.status {
+  border-top: 1px solid #ccc;
+  margin-top: 1.5rem;
+}
+.status table {
+  border-collapse: collapse;
+}
+.status td,
+.status th {
+  border: 1px solid #ccc;
+  padding: 0.2rem 0.5rem;
+  text-align: left;
+}
+.docs {
+  padding-left: 1.2rem;
+}
+.docs li {
+  margin: 0.4rem 0;
+}
+.docs button[aria-pressed='true'] {
+  font-weight: bold;
+}
+.viewer iframe {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid #ccc;
+}

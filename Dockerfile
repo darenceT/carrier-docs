@@ -10,6 +10,7 @@ COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
+COPY packages/contracts/package.json packages/contracts/
 RUN npm ci \
  && node -e "new (require('better-sqlite3'))(':memory:').close()"
 COPY . .
@@ -26,6 +27,7 @@ COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
+COPY packages/contracts/package.json packages/contracts/
 # Production dependencies, already compiled for this platform in the build stage.
 COPY --from=build /app/node_modules node_modules
 # procps provides `ps`, which the spike harness uses to measure browser memory.

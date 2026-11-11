@@ -10,6 +10,8 @@ carrier credentials, completes MFA, and sees their documents. Design decisions l
 - Server: Koa (`apps/server`), patchright for browser automation, better-sqlite3, pino, zod
 - Web: Vite + React (`apps/web`); dev server proxies `/api`, `/healthz`, `/demo-portal` to :3000
 - Mock carrier portal: `packages/mock-portal`, mounted at `/demo-portal`
+- Shared API contract: `packages/contracts` (types only: routes, bodies, SSE events). Server and
+  web both `import type` from `@carrier-docs/contracts`; change the API there first.
 - Tests: Vitest (`npm test`, files in `*/test/**/*.test.ts`), Playwright test (`npm run test:e2e`, `e2e/`)
 - Deploy: Docker image on Render (`render.yaml`), auto-deployed after CI passes
 
@@ -27,7 +29,7 @@ apps/server/src/
   carriers/<id>/  selectors.ts, adapter.ts (CarrierAdapter implementations)
 ```
 
-Rule: `core/` depends on nothing outside itself. Adapters (store, antibot, carriers, api)
+Rule: `core/` depends on nothing outside itself, except types from `@carrier-docs/contracts`. Adapters (store, antibot, carriers, api)
 depend on `core/` ports, never the other way round. Carrier code never chooses its own
 browser strategy; the anti-bot layer is selected per carrier in config.
 
