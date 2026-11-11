@@ -172,9 +172,15 @@ tokens or policy data were copied. The raw HAR stays in git-ignored `fixtures/ra
   `PgrOptOutPref` aren't login-related. No bot-manager cookies or scripts (Akamai, HUMAN,
   Cloudflare, DataDome, Imperva, Kasada) appeared; the third-party hosts were analytics, ads and
   monitoring.
-- **Open:** where the page keeps the Bearer token (local or session storage). Saved browser state
-  includes local storage but not session storage, which decides whether a repeat run skips the
-  password too, or only the SMS.
+- **Where the token lives:** not in storage. Storage holds only `ADRUM_*` (AppDynamics),
+  `QM_*`/`QEventChannel` (analytics) and display preferences (`colorTheme`, `sizeTheme`,
+  `defaultLanguageCode`, `preferredName`). The page keeps the Bearer token in memory and gets a
+  fresh one silently from PingFederate (the HAR shows a second `GET /as/<id>` reaching
+  `COMPLETED` later with no credentials), using PingFederate's `PF` session cookie.
+- **Repeat runs:** saved browser state includes `PF` (browser-close cookies are kept), so within
+  `PF`'s lifetime a repeat run should get a token silently and skip both password and SMS. After
+  `PF` expires, the user retypes the password and `pgrDevice_<uuid>` should still skip the SMS.
+  `PF`'s actual lifetime is measured in the real runs.
 
 **D1 for Progressive:** after login, call the documents API from inside the page (the page's own
 token is then sent), then `POST .../document` with `type: idCard, mimeType: pdf` and decode the
