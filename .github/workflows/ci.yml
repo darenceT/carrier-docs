@@ -7,9 +7,16 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's older run. Runs on main always finish, so every merged
+# commit gets a result before Render deploys it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -20,13 +27,35 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      # The browser download is cached per lockfile; --with-deps still installs the system
+      # libraries, which aren't cacheable. patchright's browser isn't needed here: no test uses
+      # it yet, and the Docker image installs its own.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npx playwright install --with-deps chromium
-      - run: npx -w apps/server patchright install --with-deps chromium
       - run: npm run test:e2e
-      - run: docker build -t carrier-docs .
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      # Build only (Render builds its own image from the repo). Layers are cached in GitHub
+      # Actions, so unchanged dependency and browser layers aren't rebuilt.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: carrier-docs:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
         with:
