@@ -1,6 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
 
 const PORT = 3100;
+
+// The server refuses to start without valid secrets. Throwaway values per run; never real ones.
+const testSecrets = {
+  SESSION_KEY: randomBytes(32).toString('base64'),
+  ACCESS_CODE: 'e2e-access-code',
+  CANARY_TOKEN: 'e2e-canary-token-not-secret',
+};
 
 export default defineConfig({
   testDir: 'e2e',
@@ -18,6 +26,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}/healthz`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    env: { PORT: String(PORT), DATA_DIR: 'data/e2e' },
+    env: { ...testSecrets, PORT: String(PORT), DATA_DIR: 'data/e2e', LOG_LEVEL: 'warn' },
   },
 });
