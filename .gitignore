@@ -13,4 +13,6 @@ playwright-report/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Spike harness output (screenshots of carrier pages)
 spike-results/
