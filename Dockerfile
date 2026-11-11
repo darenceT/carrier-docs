@@ -3,17 +3,15 @@
 # ---- build ----
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
-# Toolchain for native modules (better-sqlite3 compiles from source when no prebuilt
-# binary matches this Node version). Lives only in the build stage.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 make g++ \
- && rm -rf /var/lib/apt/lists/*
-# Manifests first, so npm ci is cached until dependencies change.
-COPY package.json package-lock.json ./
+# Manifests first, so npm ci is cached until dependencies change. .npmrc turns off install
+# scripts, so better-sqlite3 uses its bundled linux-x64 binary and no compiler is needed.
+# The node -e line fails the build early if that binary doesn't load.
+COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
-RUN npm ci
+RUN npm ci \
+ && node -e "new (require('better-sqlite3'))(':memory:').close()"
 COPY . .
 RUN npm run build \
  && npm prune --omit=dev
