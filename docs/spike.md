@@ -132,11 +132,51 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 
 ### Portal mapping
 
-#### Progressive (from `playwright codegen --save-har`, at home)
+#### Progressive (from a `playwright codegen --save-har` login at home, 2026-11-11)
 
-- Document list call (method, path pattern, response type):
-- PDF download URL pattern:
-- Can documents be fetched with in-page `fetch`? (decides D1):
+Read from the HAR's structure only (URL patterns, field names, status values); no credentials,
+tokens or policy data were copied. The raw HAR stays in git-ignored `fixtures/raw/`.
+
+- **Login is PingFederate's authentication API** (`login.progressive.com/pf-ws/authn/flows/<id>`),
+  driven by the page with JSON POSTs and an `X-XSRF-Header`. Status sequence:
+
+  | Step | Request                                                      | Resulting `status`           |
+  | ---- | ------------------------------------------------------------ | ---------------------------- |
+  | 1    | `GET` the flow                                               | `CREDENTIALS_REQUIRED`       |
+  | 2    | `POST ?action=checkUsernamePassword`                         | `AUTHENTICATION_REQUIRED`    |
+  | 3    | `POST ?action=authenticate` (picks the SMS device)           | `OTP_REQUIRED`               |
+  | 4    | `POST ?action=checkOtp` body `{ otp }`                       | `MFA_COMPLETED`              |
+  | 5    | `POST ?action=continueAuthentication`                        | `DEVICE_PROPERTIES_REQUIRED` |
+  | 6    | `POST ?action=setDeviceProperties` body `{ rememberDevice }` | resumes the OAuth flow       |
+  | 7    | `GET /as/<id>/resume/as/authorization.ping`, then `/as/<id>` | `COMPLETED`                  |
+
+  "Remember this device" is step 6 and sets the long-lived `pgrDevice_<uuid>` cookie (expires
+  ~13 months out), so later logins should skip steps 3-4 (the SMS).
+
+- **API auth:** `api.progressive.com/policypro/...` calls send `Authorization: Bearer <token>` (plus
+  several `x-prg*`/`x-pgr*` headers), not cookies. `GET /policypro/v1/handshake` opens the account
+  session and lists policies.
+- **Document list:** `GET https://api.progressive.com/policypro/v1/account/documents?listType=Terms`
+  returns JSON `accountDocuments[]` (per policy: `documents`, `terms[].documentType`, `actions[]`
+  with `serviceEndpointUrl`).
+- **The document itself, no separate download:** `POST https://api.progressive.com/policypro/v1/policies/<id>/document?policyInfoKey=<key>`
+  with JSON `{ type, mimeType, format, dpi, policyTerm, replacementVehicles }` returns
+  `{ message, signature, documents[] }`, where `documents` are base64 files. With
+  `type: idCard, mimeType: pdf` it returns one PDF (~116 KB); with `mimeType: png` it returns four
+  PNG images (the on-page viewer). That's why "Download" shows no network request: the PDF is
+  already in the page.
+- **Cookies:** `pgrDevice_<uuid>` (device trust, 2027-12-16), `PF` (PingFederate session, browser
+  close), `SITESERVER` (routing). `ADRUM` (AppDynamics), `QuantumMetric*` (analytics) and
+  `PgrOptOutPref` aren't login-related. No bot-manager cookies or scripts (Akamai, HUMAN,
+  Cloudflare, DataDome, Imperva, Kasada) appeared; the third-party hosts were analytics, ads and
+  monitoring.
+- **Open:** where the page keeps the Bearer token (local or session storage). Saved browser state
+  includes local storage but not session storage, which decides whether a repeat run skips the
+  password too, or only the SMS.
+
+**D1 for Progressive:** after login, call the documents API from inside the page (the page's own
+token is then sent), then `POST .../document` with `type: idCard, mimeType: pdf` and decode the
+base64 PDF. Two API calls to the first ID card, no page navigation.
 
 #### Lemonade (by hand in DevTools while logged in, 2026-11-11)
 
@@ -183,9 +223,9 @@ which is good for the 8 s budget.
 
 ## Decisions
 
-| Decision                                | Result                                                                                          | Evidence                                                                                                                                      |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1 Automation (in-page document fetch?) | Lemonade: yes, one in-page API call, then the bearer PDF link. Progressive: pending its mapping | Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy; the link downloads with no cookies |
-| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                                                 |                                                                                                                                               |
-| D3 Egress (direct or proxy)             |                                                                                                 |                                                                                                                                               |
-| `MAX_SESSIONS`                          | 1 on Starter (512 MB); no plan upgrade (decided)                                                | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                |
+| Decision                                | Result                                                                                                                                 | Evidence                                                                                                                                                                                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1 Automation (in-page document fetch?) | Yes for both. Progressive: in-page API calls, PDF returned as base64 in JSON. Lemonade: one in-page API call, then the bearer PDF link | Progressive: `POST api.progressive.com/policypro/v1/policies/<id>/document` returns the ID card PDF in `documents[]`. Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy, which downloads with no cookies |
+| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                                                                                        |                                                                                                                                                                                                                                                                  |
+| D3 Egress (direct or proxy)             |                                                                                                                                        |                                                                                                                                                                                                                                                                  |
+| `MAX_SESSIONS`                          | 1 on Starter (512 MB); no plan upgrade (decided)                                                                                       | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                                                                                                                                   |
