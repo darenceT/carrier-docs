@@ -10,16 +10,23 @@
  *   npm run spike --                          # bot-check pages only
  *   npm run spike -- https://<carrier-login>  # add carrier login pages
  *   npm run spike -- --memory https://<url>   # memory with 1..3 contexts
+ *   npm run spike -- --memory --max-contexts=2 https://<url>
  *
  * On Render (Shell tab): node apps/server/dist/scripts/spike.js [--memory] <login-url>
+ *
+ * Memory mode reads the container's own cgroup counters (Linux), which are what the platform
+ * enforces. It stops before opening another context once the container is above 85% of its
+ * limit, so a measurement can't get the service killed, and it appends every step to a log file
+ * so a crash doesn't lose the numbers.
  *
  * Env:
  *   SPIKE_STRATEGIES=stock-headless,stock-new-headless,patched-headless
  *   SPIKE_SETTLE_MS=5000   time to let anti-bot sensor scripts run
  *   SPIKE_OUT=spike-results
+ *   BROWSER_EXECUTABLE_PATH=...   optional: launch this browser binary instead of the bundled one
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Browser, BrowserType } from 'playwright';
 
@@ -73,17 +80,19 @@ const outDir =
 async function launcher(
   strategy: Strategy,
 ): Promise<{ type: BrowserType; options: Record<string, unknown> }> {
+  const executablePath = process.env.BROWSER_EXECUTABLE_PATH;
+  const base = { headless: true, ...(executablePath ? { executablePath } : {}) };
   if (strategy === 'patched-headless') {
     // patchright is a drop-in Playwright replacement with automation leaks patched.
     const mod = (await import('patchright')) as unknown as { chromium: BrowserType };
-    return { type: mod.chromium, options: { headless: true } };
+    return { type: mod.chromium, options: base };
   }
   const { chromium } = await import('playwright');
   if (strategy === 'stock-new-headless') {
     // channel 'chromium' runs the full browser in new headless mode instead of the headless shell.
-    return { type: chromium, options: { headless: true, channel: 'chromium' } };
+    return { type: chromium, options: { ...base, channel: 'chromium' } };
   }
-  return { type: chromium, options: { headless: true } };
+  return { type: chromium, options: base };
 }
 
 /**
@@ -201,28 +210,112 @@ async function probe(browser: Browser, strategy: Strategy, url: string): Promise
   }
 }
 
-/** Open 1..3 contexts on the same page and report browser memory after each. */
-async function memoryRun(strategy: Strategy, url: string): Promise<void> {
-  const { type, options } = await launcher(strategy);
-  const browser = await type.launch(options);
+interface ContainerMemory {
+  /** The enforced limit, or null if unlimited. */
+  limitMb: number | null;
+  currentMb: number;
+  /** Highest usage since the container started (kernel 5.19+), or null. */
+  peakMb: number | null;
+  /** Program memory: can't be reclaimed. */
+  anonMb: number | null;
+  /** Page cache: the kernel frees it under pressure. */
+  fileMb: number | null;
+}
+
+const MB = 1024 * 1024;
+// SPIKE_CGROUP_DIR exists for testing the parser against fake counter files.
+const CGROUP = process.env.SPIKE_CGROUP_DIR ?? '/sys/fs/cgroup';
+
+/** The container's memory as the platform sees it (cgroup v2). Null where there is no cgroup. */
+function containerMemory(): ContainerMemory | null {
+  try {
+    const read = (name: string): string => readFileSync(join(CGROUP, name), 'utf8').trim();
+    const optional = (name: string): string | null => {
+      try {
+        return read(name);
+      } catch {
+        return null;
+      }
+    };
+    const toMb = (bytes: string | null): number | null =>
+      bytes === null || bytes === 'max' ? null : Math.round(Number(bytes) / MB);
+    const stat = optional('memory.stat') ?? '';
+    const statMb = (key: string): number | null => {
+      const m = stat.match(new RegExp(`^${key} (\\d+)$`, 'm'));
+      return m ? Math.round(Number(m[1]) / MB) : null;
+    };
+    return {
+      limitMb: toMb(read('memory.max')),
+      currentMb: toMb(read('memory.current')) ?? 0,
+      peakMb: toMb(optional('memory.peak')),
+      anonMb: statMb('anon'),
+      fileMb: statMb('file'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function describeMemory(): string {
+  const node = `node ${Math.round(process.memoryUsage().rss / MB)} MB`;
+  const c = containerMemory();
+  if (!c)
+    return `browser processes ${browserRssMb() ?? 'n/a'} MB (overcounts shared memory), ${node}`;
+  const of = c.limitMb === null ? '' : ` of ${c.limitMb} MB`;
+  return (
+    `container ${c.currentMb} MB${of} (program ${c.anonMb ?? '?'} MB, cache ${c.fileMb ?? '?'} MB), ` +
+    `peak ${c.peakMb ?? '?'} MB, ${node}`
+  );
+}
+
+/** Stop before the next context if the container is already above this share of its limit. */
+const SAFETY_FRACTION = 0.85;
+
+/**
+ * Opens 1..maxContexts contexts on the same page and reports memory after each. Every line is
+ * printed and appended to a log file at once, so the numbers survive if the container is killed.
+ */
+async function memoryRun(strategy: Strategy, url: string, maxContexts: number): Promise<void> {
+  mkdirSync(outDir, { recursive: true });
+  const logFile = join(outDir, `memory-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+  const log = (line: string): void => {
+    console.log(line);
+    appendFileSync(logFile, `${line}\n`);
+  };
+
+  let browser: Browser;
+  try {
+    const { type, options } = await launcher(strategy);
+    browser = await type.launch(options);
+  } catch (err) {
+    console.warn(`skip ${strategy}: ${(err as Error).message.split('\n')[0]}`);
+    return;
+  }
+
   const contexts = [];
   try {
-    console.log(`\nmemory, ${strategy}, ${url}`);
-    console.log(`  browser idle: ${browserRssMb() ?? 'n/a'} MB`);
-    for (let n = 1; n <= 3; n++) {
+    log(`\nmemory, ${strategy}, ${url}`);
+    log(`  before any context: ${describeMemory()}`);
+    for (let n = 1; n <= maxContexts; n++) {
+      const c = containerMemory();
+      if (c?.limitMb && c.currentMb > c.limitMb * SAFETY_FRACTION) {
+        log(
+          `  stopped before context ${n}: container at ${c.currentMb} of ${c.limitMb} MB ` +
+            `(over ${SAFETY_FRACTION * 100}%), another context risks an out-of-memory kill`,
+        );
+        break;
+      }
       const ctx = await browser.newContext(CONTEXT_OPTIONS);
       contexts.push(ctx);
       const page = await ctx.newPage();
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
       await page.waitForTimeout(settleMs);
-      console.log(
-        `  ${n} context(s): ${browserRssMb() ?? 'n/a'} MB browser, ` +
-          `${Math.round(process.memoryUsage().rss / 1048576)} MB node`,
-      );
+      log(`  ${n} context(s): ${describeMemory()}`);
     }
   } finally {
     for (const c of contexts) await c.close();
     await browser.close();
+    console.log(`saved ${logFile}`);
   }
 }
 
@@ -246,7 +339,14 @@ async function main(): Promise<void> {
   }
 
   if (memory) {
-    for (const s of strategies) await memoryRun(s as Strategy, urls[0] ?? BOT_CHECKS[0]!);
+    const maxArg = args.find((a) => a.startsWith('--max-contexts='));
+    const maxContexts = maxArg ? Number(maxArg.split('=')[1]) : 3;
+    if (!Number.isInteger(maxContexts) || maxContexts < 1) {
+      throw new Error('--max-contexts must be a whole number of at least 1');
+    }
+    for (const s of strategies) {
+      await memoryRun(s as Strategy, urls[0] ?? BOT_CHECKS[0]!, maxContexts);
+    }
     return;
   }
 
