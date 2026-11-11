@@ -14,7 +14,8 @@ export interface NewContextOptions {
   fingerprint: FingerprintProfile;
   /** Saved storage state (cookies, local storage) from a previous run. Never logged. */
   storageState?: unknown;
-  proxy?: { server: string };
+  /** Egress proxy for this context, from the anti-bot layer. Credentials are never logged. */
+  proxy?: { server: string; username?: string; password?: string };
 }
 
 export interface BrowserPoolStats {
@@ -62,6 +63,11 @@ export class BrowserPool {
     };
   }
 
+  /** The running browser's version (launching it if needed), for an honest user agent. */
+  async browserVersion(): Promise<string> {
+    return (await this.getBrowser()).version();
+  }
+
   /** Launch the browser now, so the first user doesn't pay the cold start. */
   async warmup(): Promise<void> {
     await this.getBrowser();
@@ -81,7 +87,7 @@ export class BrowserPool {
     if (options.storageState !== undefined) {
       contextOptions.storageState = options.storageState as BrowserContextOptions['storageState'];
     }
-    if (options.proxy) contextOptions.proxy = { server: options.proxy.server };
+    if (options.proxy) contextOptions.proxy = { ...options.proxy };
 
     const context = await browser.newContext(contextOptions);
     if (this.closed || this.browser !== browser) {
