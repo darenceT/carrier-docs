@@ -94,23 +94,23 @@ Render findings (2026-11-11):
 
 ### Memory on Render (Starter, 512 MB)
 
-| Contexts open | Container MB (cgroup)                    | Source                                      |
-| ------------- | ---------------------------------------- | ------------------------------------------- |
-| 0 (idle app)  | 36 (`memory.current`)                    | Shell, 2026-11-11, no browser running       |
-| 1             | 388 peak (`memory.peak`, includes cache) | Shell, after the patched-headless spike run |
-| 2 or 3        | over 512: out-of-memory kill             | Render event "Ran out of memory", 05:45 UTC |
+| Contexts open  | Container MB (cgroup) | Program MB | Cache MB | Step change |
+| -------------- | --------------------- | ---------- | -------- | ----------- |
+| 0 (browser up) | 137                   | 126        | 1        |             |
+| 1              | 320                   | 279        | 28       | +183        |
+| 2              | 481 (94% of 512)      | 420        | 45       | +161        |
 
-The first memory run opened contexts one by one without a safety stop and the instance was
-killed partway ("Instance failed: ran out of memory (used over 512MB)"; it recovered on its own).
-Its output was lost with the Shell session, so the exact count it reached is unknown. The harness
-now reads cgroup counters, stops at 85% of the limit and logs each step (#17); re-run with
-`--max-contexts=2` to fill in the per-context split.
+Measured 2026-11-11 with `--memory --max-contexts=2` on the Progressive login page, patched
+headless, after #17 (cgroup counters, 85% safety stop, step log). Includes the spike script's own
+Node process (about 111 MB RSS), which the real server doesn't run.
 
-Conclusion so far: one session peaks near 390 MB, so on Starter only **1** session fits under the
-~410 MB line. Two or more need a larger plan.
+An earlier run without the safety stop opened more contexts and got the instance killed ("Ran out
+of memory (used over 512MB)", 05:45 UTC); it recovered on its own.
 
-`MAX_SESSIONS` = the largest count whose total stays under ~410 MB (512 MB with 20% headroom).
-If that's under 2, decide whether to move up a plan for the review days.
+Conclusion: each session costs about 160-185 MB, almost all program memory. Two sessions reach
+94% of the Starter limit, past the ~410 MB line, and real sessions (login, documents, PDFs) use
+more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits roughly
+(80% of its memory - 140 MB) / 170 MB sessions.
 
 ### Real login from Render (one attempt, counts against 2 failed logins a day)
 
@@ -126,9 +126,9 @@ If that's under 2, decide whether to move up a plan for the review days.
 
 ## Decisions
 
-| Decision                                | Result | Evidence |
-| --------------------------------------- | ------ | -------- |
-| D1 Automation (in-page document fetch?) |        |          |
-| D2 Browser (`PROGRESSIVE_BROWSER`)      |        |          |
-| D3 Egress (direct or proxy)             |        |          |
-| `MAX_SESSIONS`                          |        |          |
+| Decision                                | Result                                                            | Evidence                                                                                       |
+| --------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| D1 Automation (in-page document fetch?) |                                                                   |                                                                                                |
+| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                   |                                                                                                |
+| D3 Egress (direct or proxy)             |                                                                   |                                                                                                |
+| `MAX_SESSIONS`                          | 1 on Starter (512 MB); revisit if the plan is upgraded for review | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed |
