@@ -44,6 +44,7 @@ export interface ErrorBody {
 /** Mirrors STATUSES in apps/server/src/core/state-machine.ts. */
 export type SessionStatus =
   | 'idle'
+  | 'queued'
   | 'prewarming'
   | 'checking_session'
   | 'logging_in'
@@ -67,7 +68,14 @@ export interface CarrierInfo {
   name: string;
   /** True for the Demo carrier: a test fixture, not a real portal. */
   isDemo: boolean;
+  /**
+   * The fields this carrier's login form needs, in display order, e.g. ['username', 'password']
+   * for Progressive and ['email'] for Lemonade. StartSessionRequest must carry exactly these.
+   */
+  loginFields: LoginField[];
 }
+
+export type LoginField = 'username' | 'password' | 'email';
 
 export interface CarriersResponse {
   carriers: CarrierInfo[];
@@ -78,10 +86,12 @@ export interface PrewarmRequest {
   carrierId: string;
 }
 
+/** Exactly the carrier's `loginFields`, each non-empty; any other field is rejected. */
 export interface StartSessionRequest {
   carrierId: string;
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
+  email?: string;
   /**
    * The sessionId returned by prewarm, if one was made. A hint only: if it has expired or can't
    * be used, the server logs in without it rather than failing.

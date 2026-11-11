@@ -9,7 +9,7 @@ import {
   StatusPanel,
 } from './components.tsx';
 import { openSessionEvents, type EventSourceFactory } from './events.ts';
-import { initialState, reducer, screenOf } from './state.ts';
+import { initialState, loginRequest, reducer, screenOf, selectedCarrier } from './state.ts';
 
 export interface Deps {
   api: Api;
@@ -113,11 +113,13 @@ export default function App({ deps }: { deps: Deps }) {
   };
 
   const onLogin = () => {
-    const { carrierId, username, password, prewarmSessionId } = state;
+    const carrier = selectedCarrier(state);
+    if (!carrier) return;
+    const body = loginRequest(state, carrier);
     // Clears the password from state before the request is even in flight.
     dispatch({ type: 'login_submitted' });
     api
-      .startSession({ carrierId, username, password, prewarmSessionId })
+      .startSession(body)
       .then((r) => dispatch({ type: 'session_started', sessionId: r.sessionId, at: Date.now() }))
       .catch((err: unknown) =>
         onApiError(err, (e) =>

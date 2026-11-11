@@ -147,8 +147,19 @@ export function createFakeDeps(): Deps {
     if (method === 'GET' && path === '/api/carriers') {
       return json(200, {
         carriers: [
-          { id: 'demo', name: 'Demo carrier (test fixture)', isDemo: true },
-          { id: 'progressive', name: 'Progressive (fake)', isDemo: false },
+          {
+            id: 'demo',
+            name: 'Demo carrier (test fixture)',
+            isDemo: true,
+            loginFields: ['username', 'password'],
+          },
+          {
+            id: 'progressive',
+            name: 'Progressive (fake)',
+            isDemo: false,
+            loginFields: ['username', 'password'],
+          },
+          { id: 'lemonade', name: 'Lemonade (fake)', isDemo: false, loginFields: ['email'] },
         ],
       });
     }
@@ -161,7 +172,7 @@ export function createFakeDeps(): Deps {
       }
       const s: FakeSession = {
         id: `fake-${nextId++}`,
-        username: body.username ?? '',
+        username: body.username ?? body.email ?? '',
         startedAt: Date.now(),
         timings: [],
         attemptsLeft: ATTEMPTS,

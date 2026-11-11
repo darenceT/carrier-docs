@@ -1,7 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import type { CarrierInfo, DocumentMeta, ErrorCode, StepTiming } from '@carrier-docs/contracts';
+import type {
+  CarrierInfo,
+  DocumentMeta,
+  ErrorCode,
+  LoginField,
+  StepTiming,
+} from '@carrier-docs/contracts';
 import { friendlyError } from './api.ts';
-import { formatSeconds, statusText, type State } from './state.ts';
+import { canSubmitLogin, formatSeconds, selectedCarrier, statusText, type State } from './state.ts';
 
 // Dumb views: props in, callbacks out. All state lives in the reducer (state.ts).
 
@@ -59,17 +65,25 @@ export function carrierLabel(c: CarrierInfo): string {
   return c.isDemo ? `[DEMO] ${c.name} (test fixture, not a real carrier)` : c.name;
 }
 
+const FIELD_INPUT: Record<
+  LoginField,
+  { label: string; type: string; autoComplete: string; plain: boolean }
+> = {
+  username: { label: 'Username', type: 'text', autoComplete: 'username', plain: true },
+  email: { label: 'Email', type: 'email', autoComplete: 'email', plain: true },
+  password: { label: 'Password', type: 'password', autoComplete: 'current-password', plain: false },
+};
+
 export function LoginForm(props: {
   state: State;
   onSelectCarrier: (id: string) => void;
-  onField: (field: 'username' | 'password', value: string) => void;
+  onField: (field: LoginField, value: string) => void;
   onSubmit: () => void;
   onRetryCarriers: () => void;
 }) {
   const { state } = props;
-  const carrier = state.carriers?.find((c) => c.id === state.carrierId);
-  const canSubmit =
-    !!carrier && state.username !== '' && state.password !== '' && !state.loginSubmitting;
+  const carrier = selectedCarrier(state);
+  const canSubmit = canSubmitLogin(state);
   return (
     <form onSubmit={submit(props.onSubmit)}>
       <h2>Log in to your carrier</h2>
@@ -103,29 +117,24 @@ export function LoginForm(props: {
           Demo carrier: a built-in test portal, not a real insurer. Do not use real credentials.
         </p>
       ) : null}
-      <label>
-        Username
-        <input
-          name="username"
-          autoComplete="username"
-          autoCapitalize="none"
-          spellCheck={false}
-          value={state.username}
-          onChange={(e) => props.onField('username', e.target.value)}
-          required
-        />
-      </label>
-      <label>
-        Password
-        <input
-          type="password"
-          name="password"
-          autoComplete="current-password"
-          value={state.password}
-          onChange={(e) => props.onField('password', e.target.value)}
-          required
-        />
-      </label>
+      {/* The carrier declares its fields: username + password, or (Lemonade) email only. */}
+      {carrier?.loginFields.map((field) => {
+        const input = FIELD_INPUT[field];
+        return (
+          <label key={field}>
+            {input.label}
+            <input
+              type={input.type}
+              name={field}
+              autoComplete={input.autoComplete}
+              {...(input.plain ? { autoCapitalize: 'none', spellCheck: false } : {})}
+              value={state[field]}
+              onChange={(e) => props.onField(field, e.target.value)}
+              required
+            />
+          </label>
+        );
+      })}
       {state.loginError ? (
         <ErrorLine code={state.loginError.code} message={state.loginError.message} />
       ) : null}

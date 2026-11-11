@@ -150,7 +150,7 @@ describe('routes', () => {
     const agent = await authed();
     await agent.post('/api/sessions/prewarm').send({ carrierId: 'demo' });
     await agent.post('/api/sessions').send(login);
-    const owners = sessions.calls.map((c) => ('ownerId' in c ? c.ownerId : undefined));
+    const owners = sessions.calls.flatMap((c) => ('ownerId' in c ? [c.ownerId] : []));
     expect(new Set(owners).size).toBe(1);
   });
 
@@ -294,6 +294,16 @@ describe('error mapping', () => {
     ['/api/sessions', 'empty username', { ...login, username: '' }],
     ['/api/sessions', 'huge password', { ...login, password: 'x'.repeat(300) }],
     ['/api/sessions', 'non-string password', { ...login, password: 123 }],
+    ['/api/sessions', 'unknown carrier', { ...login, carrierId: 'nope' }],
+    ['/api/sessions', 'missing carrierId', { username: 'u', password: 'p' }],
+    ['/api/sessions', 'email for a username carrier', { ...login, email: 'a@b.co' }],
+    [
+      '/api/sessions',
+      'password for an email-only carrier',
+      { carrierId: 'lemonade', email: 'a@b.co', password: 'p' },
+    ],
+    ['/api/sessions', 'missing email', { carrierId: 'lemonade' }],
+    ['/api/sessions', 'malformed email', { carrierId: 'lemonade', email: 'not-an-email' }],
     [`/api/sessions/${KNOWN_SESSION}/mfa`, 'short code', { code: '123' }],
     [`/api/sessions/${KNOWN_SESSION}/mfa`, 'long code', { code: '12345678901' }],
     [`/api/sessions/${KNOWN_SESSION}/mfa`, 'letters', { code: '12ab56' }],
@@ -303,11 +313,24 @@ describe('error mapping', () => {
   it.each(badBodies)('POST %s with %s -> 400 VALIDATION_FAILED', async (url, _label, body) => {
     const { authed, sessions } = makeHarness();
     const agent = await authed();
-    const before = sessions.calls.length;
+    const acted = () => sessions.calls.filter((c) => c.method !== 'listCarriers').length;
+    const before = acted();
     const res = await agent.post(url).send(body as object);
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_FAILED');
-    expect(sessions.calls.length).toBe(before);
+    expect(acted()).toBe(before);
+  });
+
+  it('accepts an email-only login for a carrier that declares just email', async () => {
+    const { authed, sessions } = makeHarness();
+    const res = await (
+      await authed()
+    )
+      .post('/api/sessions')
+      .send({ carrierId: 'lemonade', email: 'jane@example.com' });
+    expect(res.status).toBe(202);
+    const call = sessions.calls.find((c) => c.method === 'start');
+    expect(call).toMatchObject({ input: { carrierId: 'lemonade', email: 'jane@example.com' } });
   });
 
   it('never echoes rejected values in the validation message', async () => {

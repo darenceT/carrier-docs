@@ -1,10 +1,24 @@
-import type { DocumentMeta, SessionEvent } from '@carrier-docs/contracts';
+import type { CarrierInfo, DocumentMeta, SessionEvent } from '@carrier-docs/contracts';
 import { describe, expect, it } from 'vitest';
-import { initialState, reducer, screenOf, type Action, type State } from '../src/state.ts';
+import {
+  canSubmitLogin,
+  initialState,
+  loginRequest,
+  reducer,
+  screenOf,
+  type Action,
+  type State,
+} from '../src/state.ts';
 
-const CARRIERS = [
-  { id: 'demo', name: 'Demo carrier (test fixture)', isDemo: true },
-  { id: 'progressive', name: 'Progressive', isDemo: false },
+const CARRIERS: CarrierInfo[] = [
+  {
+    id: 'demo',
+    name: 'Demo carrier (test fixture)',
+    isDemo: true,
+    loginFields: ['username', 'password'],
+  },
+  { id: 'progressive', name: 'Progressive', isDemo: false, loginFields: ['username', 'password'] },
+  { id: 'lemonade', name: 'Lemonade', isDemo: false, loginFields: ['email'] },
 ];
 
 const DOCS: DocumentMeta[] = [
@@ -39,6 +53,41 @@ const started = (): State =>
     [{ type: 'login_submitted' }, { type: 'session_started', sessionId: 's1', at: 1000 }],
     typed(),
   );
+
+describe('login fields per carrier', () => {
+  it('sends exactly the fields the carrier declares, plus the pre-warm hint', () => {
+    expect(loginRequest(typed(), CARRIERS[0]!)).toEqual({
+      carrierId: 'demo',
+      username: 'alice',
+      password: 'hunter2',
+      prewarmSessionId: 'pw-1',
+    });
+  });
+
+  it('sends only an email for an email-only carrier, even with a stale password typed', () => {
+    const s = run(
+      [
+        { type: 'carrier_selected', carrierId: 'lemonade' },
+        { type: 'field_changed', field: 'email', value: 'jane@example.com' },
+      ],
+      typed(),
+    );
+    expect(loginRequest(s, CARRIERS[2]!)).toEqual({
+      carrierId: 'lemonade',
+      email: 'jane@example.com',
+    });
+  });
+
+  it('enables submit only when every declared field is filled', () => {
+    expect(canSubmitLogin(typed())).toBe(true);
+    const lemonade = run([{ type: 'carrier_selected', carrierId: 'lemonade' }], typed());
+    expect(canSubmitLogin(lemonade)).toBe(false);
+    expect(
+      canSubmitLogin(reducer(lemonade, { type: 'field_changed', field: 'email', value: 'a@b.co' })),
+    ).toBe(true);
+    expect(canSubmitLogin(run([{ type: 'carrier_selected', carrierId: '' }], typed()))).toBe(false);
+  });
+});
 
 describe('access', () => {
   it('shows the access screen on 401 and leaves it once granted', () => {

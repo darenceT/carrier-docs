@@ -82,11 +82,13 @@ export interface SessionService {
    * - Every call returns a new sessionId, used for events, MFA and documents.
    *
    * Capacity: at the cap, close this owner's own unused pre-warm, then the oldest unused
-   * pre-warm of anyone, before throwing AppError('BUSY'). A real login outranks a pre-warm. The
-   * cap check and the slot reservation happen together, with no await in between.
+   * pre-warm of anyone. A real login outranks a pre-warm. If every slot is still held by a
+   * login, the session waits in line (`queued`, holding no slot) for up to QUEUE_WAIT_S, first
+   * in first out, then fails with BUSY on its event stream. The cap check and the slot
+   * reservation happen together, with no await in between.
    *
-   * Throws AppError('BUSY') when every slot is held by a login in progress or an open session,
-   * ('VALIDATION_FAILED') for an unknown carrier.
+   * Throws AppError('BUSY') only when the line itself is full (5 waiting),
+   * ('VALIDATION_FAILED') for an unknown carrier or login fields that don't match it.
    */
   start(ownerId: string, input: StartSessionRequest): Promise<{ sessionId: string }>;
   submitMfa(ownerId: string, sessionId: string, code: string): Promise<void>;

@@ -67,6 +67,7 @@ describe('session state machine', () => {
 
   it.each<Status>([
     'idle',
+    'queued',
     'prewarming',
     'checking_session',
     'logging_in',
@@ -89,6 +90,9 @@ describe('session state machine', () => {
     ['idle', { type: 'FAST_PATH_HIT' }],
     ['logging_in', { type: 'CHECK_SAVED_SESSION' }],
     ['checking_session', { type: 'MFA_REQUESTED' }],
+    ['prewarming', { type: 'QUEUE' }],
+    ['queued', { type: 'QUEUE' }],
+    ['queued', { type: 'PREWARM' }],
   ])('rejects invalid transitions (%s + %o)', (status, event) => {
     expect(() => transition(at(status), event)).toThrow(AppError);
   });
@@ -102,12 +106,26 @@ describe('session state machine', () => {
 
   it('counts only active, non-idle sessions toward the browser-slot cap', () => {
     expect(holdsBrowserSlot(at('idle'))).toBe(false);
+    expect(holdsBrowserSlot(at('queued'))).toBe(false);
     expect(holdsBrowserSlot(at('prewarming'))).toBe(true);
     expect(holdsBrowserSlot(at('checking_session'))).toBe(true);
     expect(holdsBrowserSlot(at('mfa_required'))).toBe(true);
     expect(holdsBrowserSlot(at('document_ready'))).toBe(true);
     expect(holdsBrowserSlot(at('done'))).toBe(false);
     expect(holdsBrowserSlot(at('failed'))).toBe(false);
+  });
+
+  it('a queued login leaves the line for a full login or the fast path', () => {
+    expect(run([{ type: 'QUEUE' }, { type: 'START_LOGIN' }]).status).toBe('logging_in');
+    expect(run([{ type: 'QUEUE' }, { type: 'CHECK_SAVED_SESSION' }]).status).toBe(
+      'checking_session',
+    );
+  });
+
+  it('a queued login fails with BUSY when the wait runs out, or closes if abandoned', () => {
+    const busy = run([{ type: 'QUEUE' }, { type: 'FAIL', code: 'BUSY', retryable: true }]);
+    expect(busy).toMatchObject({ status: 'failed', error: { code: 'BUSY', retryable: true } });
+    expect(run([{ type: 'QUEUE' }, { type: 'CLOSE' }]).status).toBe('done');
   });
 
   it('canTransition reports late or invalid events without throwing', () => {

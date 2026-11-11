@@ -15,8 +15,14 @@ export type Call =
 type Method = Exclude<Call['method'], 'unsubscribe'>;
 
 export const CARRIERS: CarrierInfo[] = [
-  { id: 'demo', name: 'Demo carrier (test fixture)', isDemo: true },
-  { id: 'progressive', name: 'Progressive', isDemo: false },
+  {
+    id: 'demo',
+    name: 'Demo carrier (test fixture)',
+    isDemo: true,
+    loginFields: ['username', 'password'],
+  },
+  { id: 'progressive', name: 'Progressive', isDemo: false, loginFields: ['username', 'password'] },
+  { id: 'lemonade', name: 'Lemonade', isDemo: false, loginFields: ['email'] },
 ];
 
 export const KNOWN_SESSION = 'sess-1';
