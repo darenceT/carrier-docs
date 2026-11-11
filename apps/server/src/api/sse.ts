@@ -59,12 +59,16 @@ export const HEARTBEAT = ': ping\n\n';
  * Streams a session's events. Subscribes before any header is sent, so a NOT_FOUND from the
  * service becomes a normal 404 ErrorBody. Cleans up the subscription and heartbeat on disconnect.
  */
+export interface StreamOptions {
+  sessions: SessionService;
+  ownerId: string;
+  sessionId: string;
+  heartbeatMs: number;
+}
+
 export function streamSessionEvents(
   ctx: Context,
-  sessions: SessionService,
-  ownerId: string,
-  sessionId: string,
-  heartbeatMs: number,
+  { sessions, ownerId, sessionId, heartbeatMs }: StreamOptions,
 ): void {
   const stream = new PassThrough();
   let closed = false;

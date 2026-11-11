@@ -2,7 +2,7 @@ import type { ErrorBody } from '@carrier-docs/contracts';
 import type { Context, Middleware } from 'koa';
 import type { Logger } from 'pino';
 import { z } from 'zod';
-import { ERROR_INFO, isAppError, type ErrorCode } from '../core/errors.js';
+import { ERROR_INFO, isAppError, type ErrorCode } from '../../core/errors.js';
 
 /** The JSON body for an error response. Messages come from ERROR_INFO, so nothing internal leaks. */
 export function errorBody(code: ErrorCode, message: string = ERROR_INFO[code].message): ErrorBody {
@@ -32,7 +32,7 @@ function isClientHttpError(err: unknown): boolean {
  * errors -> VALIDATION_FAILED; anything else -> INTERNAL with the generic message. Details of
  * unknown errors go to the redacting log only, never to the response.
  */
-export function errorMiddleware(logger: Logger): Middleware {
+export function errorHandler(logger: Logger): Middleware {
   return async (ctx, next) => {
     try {
       await next();

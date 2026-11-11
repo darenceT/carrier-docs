@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { safeFilename } from '../../src/api/documents.js';
+import { safeFilename } from '../../src/api/send-document.js';
 import { AppError } from '../../src/core/errors.js';
 import { CARRIERS, KNOWN_SESSION } from './fake-session-service.js';
 import { ACCESS_CODE, cookieHeader, makeHarness, setCookies } from './helpers.js';

@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Context, Middleware } from 'koa';
-import { AppError } from '../core/errors.js';
+import { AppError } from '../../core/errors.js';
 
 export const ACCESS_COOKIE = 'cd_access';
 export const OWNER_COOKIE = 'cd_owner';
