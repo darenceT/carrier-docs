@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
-    "spike": "tsx src/scripts/spike.ts"
+    "spike": "tsx src/scripts/spike.ts",
+    "live-login": "tsx src/scripts/live-login.ts"
   },
   "dependencies": {
     "@koa/bodyparser": "^6.1.0",
