@@ -9,24 +9,39 @@ interface Row {
   expires_at: number;
 }
 
+export interface SqliteStoreOptions {
+  fileName?: string;
+  /**
+   * Called when a row exists but won't decrypt (wrong SESSION_KEY, or tampering). Gets no key and
+   * no blob, so it's safe to log or count. A rising count after a deploy means a bad key.
+   */
+  onUndecryptable?: () => void;
+}
+
 /**
- * SessionStore on SQLite in DATA_DIR (Render's persistent disk). Each saved session is encrypted
- * with AES-256-GCM before it touches disk; only the opaque key, owner ID and expiry are plaintext.
- * A row that no longer decrypts (for example after SESSION_KEY rotation) is treated as missing
- * and deleted, so the user simply logs in again.
+ * SessionStore on SQLite in DATA_DIR (Render's persistent disk).
+ *
+ * - Each saved session is encrypted with AES-256-GCM, bound to its row key as associated data, so
+ *   a blob copied into another user's row won't decrypt.
+ * - The owner ID (the browser-cookie ID used by "Forget me") is stored only as a keyed hash.
+ * - A row that won't decrypt is treated as missing but NOT deleted: a mistyped SESSION_KEY on one
+ *   deploy then loses nothing once the key is fixed. The TTL purge removes it in time, and the next
+ *   successful login overwrites it.
  */
 export class SqliteSessionStore implements SessionStore {
   private readonly db: Database.Database;
   private readonly stmt;
+  private readonly onUndecryptable: () => void;
 
   constructor(
     dataDir: string,
     private readonly cipher: Cipher,
     private readonly clock: Clock,
-    fileName = 'sessions.db',
+    options: SqliteStoreOptions = {},
   ) {
+    this.onUndecryptable = options.onUndecryptable ?? (() => {});
     mkdirSync(dataDir, { recursive: true });
-    this.db = new Database(path.join(dataDir, fileName));
+    this.db = new Database(path.join(dataDir, options.fileName ?? 'sessions.db'));
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -51,6 +66,11 @@ export class SqliteSessionStore implements SessionStore {
     };
   }
 
+  /** Owner IDs are bearer values (cookie IDs), so only a keyed hash of them touches disk. */
+  private ownerHash(ownerId: string): string {
+    return this.cipher.mac('owner', ownerId);
+  }
+
   async get(key: string): Promise<SavedSession | undefined> {
     const row = this.stmt.get.get(key);
     if (!row) return undefined;
@@ -59,16 +79,16 @@ export class SqliteSessionStore implements SessionStore {
       return undefined;
     }
     try {
-      return JSON.parse(this.cipher.decrypt(row.blob)) as SavedSession;
+      return JSON.parse(this.cipher.decrypt(row.blob, key)) as SavedSession;
     } catch {
-      this.stmt.delete.run(key);
+      this.onUndecryptable();
       return undefined;
     }
   }
 
   async put(key: string, ownerId: string, session: SavedSession, ttlMs: number): Promise<void> {
-    const blob = this.cipher.encrypt(JSON.stringify(session));
-    this.stmt.put.run(key, ownerId, blob, this.clock.now() + ttlMs);
+    const blob = this.cipher.encrypt(JSON.stringify(session), key);
+    this.stmt.put.run(key, this.ownerHash(ownerId), blob, this.clock.now() + ttlMs);
   }
 
   async delete(key: string): Promise<void> {
@@ -76,7 +96,7 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   async deleteByOwner(ownerId: string): Promise<number> {
-    return this.stmt.deleteByOwner.run(ownerId).changes;
+    return this.stmt.deleteByOwner.run(this.ownerHash(ownerId)).changes;
   }
 
   async purgeExpired(): Promise<number> {

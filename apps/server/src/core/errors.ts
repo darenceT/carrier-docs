@@ -1,13 +1,14 @@
 /**
  * Stable error codes. Every failure in the system maps to one of these, so the UI,
- * logs and tests share one vocabulary. Extend this list here and nowhere else.
+ * logs and tests share one vocabulary. Extend this list here and nowhere else (and in CLAUDE.md).
  */
 export const ERROR_CODES = [
-  'INVALID_CREDENTIALS',
-  'MFA_REQUIRED',
+  'BAD_CREDENTIALS',
   'MFA_INVALID',
   'MFA_TIMEOUT',
-  'BLOCKED',
+  'CARRIER_BLOCKED',
+  'CARRIER_CHALLENGE',
+  'CARRIER_PAGE_CHANGED',
   'CARRIER_UNAVAILABLE',
   'SESSION_EXPIRED',
   'BUSY',
@@ -30,18 +31,14 @@ interface ErrorInfo {
 }
 
 export const ERROR_INFO: Record<ErrorCode, ErrorInfo> = {
-  INVALID_CREDENTIALS: {
+  BAD_CREDENTIALS: {
     status: 401,
     retryable: false,
     message: 'The carrier rejected the username or password.',
   },
-  MFA_REQUIRED: {
-    status: 409,
-    retryable: true,
-    message: 'The carrier needs a verification code.',
-  },
+  // 422, not 401: the UI treats 401 as "access code expired".
   MFA_INVALID: {
-    status: 401,
+    status: 422,
     retryable: false,
     message: 'The verification code was not accepted.',
   },
@@ -50,10 +47,21 @@ export const ERROR_INFO: Record<ErrorCode, ErrorInfo> = {
     retryable: true,
     message: 'No verification code arrived in time. Start again.',
   },
-  BLOCKED: {
+  CARRIER_BLOCKED: {
     status: 503,
     retryable: false,
     message: "The carrier's bot protection blocked this login.",
+  },
+  CARRIER_CHALLENGE: {
+    status: 503,
+    retryable: false,
+    message:
+      'The carrier asked for a human check (for example a CAPTCHA) that this app cannot pass.',
+  },
+  CARRIER_PAGE_CHANGED: {
+    status: 502,
+    retryable: false,
+    message: "The carrier's portal has changed and this app needs an update.",
   },
   CARRIER_UNAVAILABLE: {
     status: 502,
