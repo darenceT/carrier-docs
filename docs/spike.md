@@ -93,6 +93,8 @@ Lemonade findings (2026-11-11, login page `https://www.lemonade.com/login#email`
 - Memory on Render, one context on Lemonade's login page: container 217 MB before, 300 MB after
   (+83 MB), versus +183 MB for Progressive's. Progressive is the limiting case for `MAX_SESSIONS`.
 - The bot-check rows from these runs match the earlier ones and aren't repeated.
+- Lemonade runs Cloudflare bot detection (see the Lemonade mapping), so "clean on load" matters
+  less here than the real login.
 
 Render findings (2026-11-11):
 
@@ -180,8 +182,23 @@ base64 PDF. Two API calls to the first ID card, no page navigation.
 
 #### Lemonade (by hand in DevTools while logged in, 2026-11-11)
 
-- **Login:** email only, then an SMS code to the account holder's phone. Code-page URL and form
-  field names to capture in the scheduled codegen login (submitting the email texts the lender).
+- **Login (from a codegen HAR, 2026-11-11; structure only, no values copied):** two JSON calls on
+  `www.lemonade.com`, each sending an `x-csrf-token` header (from the `_csrf` cookie):
+
+  | Step | Request                                                | Response                                                |
+  | ---- | ------------------------------------------------------ | ------------------------------------------------------- |
+  | 1    | `POST /login/presign` `{ email, preferred_channel }`   | `{ publicId, channel, digits, usedContact }` (SMS sent) |
+  | 2    | `POST /login/signin` `{ code, consentReceived }` (201) | `{ redirectTo }`, then the app on `me.lemonade.com`     |
+
+  No "remember this device" step exists, so every fresh login needs a new SMS code from the
+  lender; repeat runs depend on the saved cookies staying valid.
+
+- **Login cookies set:** `customer_session(.sig)` and related `customer_interaction*` cookies on
+  `.lemonade.com` (HttpOnly, Secure), `_lmnd_shared_auth` (HttpOnly, Secure, long-lived) and
+  `connect.sid` on `me.lemonade.com`, `_lmnd_users_edge_session` on `my.lemonade.com`. Local storage
+  holds only analytics and ad keys (Taboola, mParticle, Google, Snap), so the login is cookie-based:
+  saved browser state captures it fully. API calls on `my.lemonade.com` send cookies plus
+  `x-csrf-token`.
 - **Domains:** `me.lemonade.com` (web app), `my.lemonade.com` (JSON API), `icebox.lemonade.com`
   (document downloads).
 - **Landing page after login:** `https://me.lemonade.com/` (plus a `resetHash` query string).
@@ -209,13 +226,13 @@ base64 PDF. Two API calls to the first ID card, no page navigation.
   after 2026-11-12 19:07 UTC, open `https://me.lemonade.com/` in the same browser and note whether
   it is still logged in.
 
-- **Anti-bot:** no commercial bot manager found on Lemonade's own domains. The only bot-manager
-  cookie seen was `datadome` on `.taboola.com` (Taboola, an embedded ad network, protecting its
-  own servers). Checked 2026-11-11: no `datadome` cookie on `me.lemonade.com` or
-  `my.lemonade.com`, and no requests from Lemonade's pages to `js.datadome.co` /
-  `api-js.datadome.co`. No other common bot-manager cookies either (Akamai `_abck`/`bm_sz`, HUMAN
-  `_px*`, Cloudflare `__cf_bm`, Imperva `incap_ses_*`/`reese84`, Kasada). Lemonade may still rate
-  limit or score logins server-side; the real login from Render settles it.
+- **Anti-bot: Cloudflare bot detection is on.** The HAR shows Cloudflare's JavaScript detection
+  (`POST /cdn-cgi/challenge-platform/h/b/precursor/...`) on both `www.lemonade.com` and
+  `me.lemonade.com`, and Cloudflare's `cf_clearance` cookie (HttpOnly) being set on both. It was
+  missed in the cookie list read by hand earlier. The DataDome cookie seen there belongs to Taboola,
+  an embedded ad network, not Lemonade. Login pages loaded clean from Render with patched headless,
+  but Cloudflare can still challenge on submit; the real login from Render settles it, and the
+  headed fallback (D2-D) is the first response if it does.
 
 **D1 for Lemonade:** no page navigation needed after login. Call the policies API from inside the
 logged-in page, then fetch each `form_url` and stream the PDF. Two requests to the first document,
