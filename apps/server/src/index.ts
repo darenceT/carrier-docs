@@ -1,18 +1,31 @@
 import path from 'node:path';
 import { createApp } from './app.js';
+import { ConfigError, loadConfig, type Config } from './infra/config.js';
+import { createLogger } from './infra/logger.js';
 
-// Minimal env handling for Phase 1. Phase 3 replaces this with zod-validated config.
-const port = Number(process.env.PORT ?? 3000);
-const dataDir = process.env.DATA_DIR ?? path.resolve('data');
+// Validate every env var before doing anything else. ConfigError lists problems by variable
+// name only, never values, so it's safe to print.
+let config: Config;
+try {
+  config = loadConfig();
+} catch (err) {
+  if (err instanceof ConfigError) {
+    process.stderr.write(`${err.message}\n`);
+    process.exit(1);
+  }
+  throw err;
+}
+
+const logger = createLogger({ level: config.logLevel });
 const webDistDir = path.resolve(import.meta.dirname, '../../web/dist');
 
-const app = createApp({ dataDir, webDistDir });
-const server = app.listen(port, () => {
-  console.log(`carrier-docs listening on :${port}`);
+const app = createApp({ webDistDir });
+const server = app.listen(config.port, () => {
+  logger.info({ port: config.port, env: config.env }, 'carrier-docs listening');
 });
 
 function shutdown(signal: string): void {
-  console.log(`${signal} received, closing server`);
+  logger.info({ signal }, 'shutting down');
   server.close(() => process.exit(0));
   // Hard stop if connections linger (Render allows ~30 s on redeploy).
   setTimeout(() => process.exit(1), 25_000).unref();
@@ -20,3 +33,7 @@ function shutdown(signal: string): void {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  logger.fatal({ err: reason }, 'unhandled promise rejection');
+  process.exit(1);
+});
