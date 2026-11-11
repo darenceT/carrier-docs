@@ -1,4 +1,11 @@
-import type { CarrierInfo, SessionEvent, StartSessionRequest } from '@carrier-docs/contracts';
+import type {
+  CarrierInfo,
+  DocumentMeta,
+  LoginField,
+  SessionEvent,
+  StartSessionRequest,
+} from '@carrier-docs/contracts';
+import type { ErrorCode } from './errors.js';
 
 /**
  * Ports: the interfaces the core depends on. Implementations live outside core/
@@ -41,6 +48,50 @@ export interface SessionStore {
   /** Remove expired rows. Returns how many. */
   purgeExpired(): Promise<number>;
   close(): Promise<void>;
+}
+
+// ---------- carrier adapters ----------
+
+/** What the user typed: exactly the carrier's `loginFields`. Held only for the login call. */
+export type Credentials = Partial<Record<LoginField, string>>;
+
+/**
+ * The result of a login or MFA step (design: ok | mfa_required | bad_credentials | blocked |
+ * changed). Failures carry a stable error code: BAD_CREDENTIALS, MFA_INVALID, CARRIER_BLOCKED,
+ * CARRIER_CHALLENGE, CARRIER_PAGE_CHANGED or CARRIER_UNAVAILABLE.
+ */
+export type LoginOutcome =
+  | { kind: 'ok' }
+  | {
+      kind: 'mfa_required';
+      /** e.g. "We sent a code to •••-•••-1234", as the carrier words it. */
+      hint?: string;
+      /** True when this follows a rejected code (submitMfa only). */
+      rejected?: boolean;
+    }
+  | { kind: 'failed'; code: ErrorCode };
+
+/**
+ * One carrier's portal. Adapters drive a page they are handed; they never launch a browser,
+ * pick an IP or decide pacing (the anti-bot layer does). Generic over the page type so core/
+ * doesn't depend on the automation library.
+ *
+ * Methods throw AppError with a stable code for anything unexpected: CARRIER_PAGE_CHANGED when
+ * an expected element is missing, CARRIER_UNAVAILABLE when the portal doesn't respond,
+ * SESSION_EXPIRED when the carrier no longer accepts the session.
+ */
+export interface CarrierAdapter<Page> {
+  readonly info: CarrierInfo;
+  /** Load the login page, so a later login() starts from it (pre-warm). */
+  openLogin(page: Page): Promise<void>;
+  login(page: Page, credentials: Credentials): Promise<LoginOutcome>;
+  /** Also ticks "remember this device" where the carrier offers it. */
+  submitMfa(page: Page, code: string): Promise<LoginOutcome>;
+  /** Whether a page opened with saved cookies is still logged in. */
+  isSessionValid(page: Page): Promise<boolean>;
+  /** ID cards first, then declarations, then the rest. */
+  listDocuments(page: Page): Promise<DocumentMeta[]>;
+  fetchDocument(page: Page, documentId: string): Promise<DocumentContent>;
 }
 
 // ---------- the session service the API depends on ----------
