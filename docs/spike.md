@@ -94,12 +94,20 @@ Render findings (2026-11-11):
 
 ### Memory on Render (Starter, 512 MB)
 
-| Contexts open | Browser MB | Node MB | Total MB |
-| ------------- | ---------- | ------- | -------- |
-| 0 (idle)      |            |         |          |
-| 1             |            |         |          |
-| 2             |            |         |          |
-| 3             |            |         |          |
+| Contexts open | Container MB (cgroup)                    | Source                                      |
+| ------------- | ---------------------------------------- | ------------------------------------------- |
+| 0 (idle app)  | 36 (`memory.current`)                    | Shell, 2026-11-11, no browser running       |
+| 1             | 388 peak (`memory.peak`, includes cache) | Shell, after the patched-headless spike run |
+| 2 or 3        | over 512: out-of-memory kill             | Render event "Ran out of memory", 05:45 UTC |
+
+The first memory run opened contexts one by one without a safety stop and the instance was
+killed partway ("Instance failed: ran out of memory (used over 512MB)"; it recovered on its own).
+Its output was lost with the Shell session, so the exact count it reached is unknown. The harness
+now reads cgroup counters, stops at 85% of the limit and logs each step (#17); re-run with
+`--max-contexts=2` to fill in the per-context split.
+
+Conclusion so far: one session peaks near 390 MB, so on Starter only **1** session fits under the
+~410 MB line. Two or more need a larger plan.
 
 `MAX_SESSIONS` = the largest count whose total stays under ~410 MB (512 MB with 20% headroom).
 If that's under 2, decide whether to move up a plan for the review days.
