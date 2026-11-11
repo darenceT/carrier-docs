@@ -70,6 +70,10 @@ Fill in with measured values, never targets. No credentials, policy numbers or n
 | 2026-11-11 | Render | patched-headless   | sannysoft         | clean   | 200    | false     | 983    |                                          |
 | 2026-11-11 | Render | patched-headless   | CreepJS           | clean   | 200    | false     | 410    |                                          |
 | 2026-11-11 | Render | patched-headless   | Progressive login | clean   | 200    | false     | 1068   |                                          |
+| 2026-11-11 | home   | stock-headless     | Lemonade login    | clean   | 200    | true      | 1317   |                                          |
+| 2026-11-11 | home   | stock-new-headless | Lemonade login    | clean   | 200    | true      | 1335   |                                          |
+| 2026-11-11 | home   | patched-headless   | Lemonade login    | clean   | 200    | false     | 1302   |                                          |
+| 2026-11-11 | Render | patched-headless   | Lemonade login    | clean   | 200    | false     | 1499   |                                          |
 
 Home findings (2026-11-11):
 
@@ -81,6 +85,14 @@ Home findings (2026-11-11):
   does not prove a login will pass: anti-bot scoring usually happens on form submit. The real
   login from Render settles that.
 - The 3414 ms on the first row is the run's first page load (cold start).
+
+Lemonade findings (2026-11-11, login page `https://www.lemonade.com/login#email`):
+
+- Clean at home with all three strategies and from Render with patched headless (HTTP 200, no
+  block or challenge). Same `webdriver` pattern as Progressive: stock `true`, patched `false`.
+- Memory on Render, one context on Lemonade's login page: container 217 MB before, 300 MB after
+  (+83 MB), versus +183 MB for Progressive's. Progressive is the limiting case for `MAX_SESSIONS`.
+- The bot-check rows from these runs match the earlier ones and aren't repeated.
 
 Render findings (2026-11-11):
 
