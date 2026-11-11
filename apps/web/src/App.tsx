@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from 'react';
+import { useCallback, useEffect, useReducer, useState } from 'react';
 import { friendlyError, toApiError, type Api, type ApiError } from './api.ts';
 import {
   AccessForm,
@@ -14,6 +14,22 @@ import { initialState, reducer, screenOf } from './state.ts';
 export interface Deps {
   api: Api;
   eventSource: EventSourceFactory;
+}
+
+/** Small footer showing whether the server answers /healthz (also used by the e2e smoke test). */
+function ServerHealth() {
+  const [health, setHealth] = useState<'checking' | 'ok' | 'down'>('checking');
+  useEffect(() => {
+    fetch('/healthz')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((body: { ok?: boolean }) => setHealth(body.ok ? 'ok' : 'down'))
+      .catch(() => setHealth('down'));
+  }, []);
+  return (
+    <footer className="note">
+      <span data-testid="health">Server: {health}</span>
+    </footer>
+  );
 }
 
 export default function App({ deps }: { deps: Deps }) {
@@ -216,6 +232,7 @@ export default function App({ deps }: { deps: Deps }) {
           firstDocumentMs={state.firstDocumentMs}
         />
       ) : null}
+      <ServerHealth />
     </main>
   );
 }
