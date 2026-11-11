@@ -35,6 +35,10 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npx playwright install --with-deps chromium
+      # Adapter and pool tests against a real Chromium and the local mock portal (no network).
+      - run: npx vitest run apps/server/test/carriers apps/server/test/browser
+        env:
+          RUN_BROWSER_TESTS: '1'
       - run: npm run test:e2e
 
   docker:
