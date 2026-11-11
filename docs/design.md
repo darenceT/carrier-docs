@@ -56,28 +56,28 @@ the carrier fingerprints TLS. Then a small Python worker behind the Node API is 
 
 All answered except Q2.
 
-| #   | Question                                   | Answer / decision                                                                                                                                                                                                                                                      |
-| --- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Q1  | How does Progressive MFA arrive?           | SMS; "remember this device" is offered. Saving the device-trust cookie after the first MFA should let repeat runs skip MFA                                                                                                                                             |
-| Q2  | Lender's carrier and timing                | **Open.** Who, which carrier (not Progressive), and when they can send the login                                                                                                                                                                                       |
-| Q3  | Budget                                     | Free first, a few dollars at most, no vendors. Start with the host's own IP; a small pay-as-you-go proxy only if the spike is blocked. Cheapest paid Render instance is OK                                                                                             |
-| Q4  | Cloud                                      | Render: long-lived Docker web services fit D4-B. Free instance is out (sleeps, too little RAM)                                                                                                                                                                         |
-| Q5  | Store passwords?                           | Never (D7-A). Saved cookies plus the device-trust token give session reuse without the password                                                                                                                                                                        |
-| Q6  | What the 8 s covers                        | Assume 2 s for the human's MFA typing; the clock stops at the first document on screen. Measure "first document on screen" (headline) and "full list loaded" separately; state both in the README                                                                      |
-| Q7  | Which documents                            | ID cards first, timed; fall back to the declarations page for policies without an ID card (home, renters). Everything else loads lazily                                                                                                                                |
-| Q8  | TypeScript, and a Python worker if needed? | Yes to both. TypeScript throughout, Python worker as fallback                                                                                                                                                                                                          |
-| Q9  | Deadline                                   | 2 days, up to 20 hours of work. Points to D4-B: one container, no worker pool or queue                                                                                                                                                                                 |
-| Q10 | Who uses the hosted URL?                   | Reviewers too. One shared access code (env var), entered once and kept in a signed cookie, plus a per-IP rate limit on login. No user accounts                                                                                                                         |
-| Q11 | Recognizing a returning user               | Random ID in a signed browser cookie + carrier + hash of the username; all must match. Username alone would let anyone who types it get the session                                                                                                                    |
-| Q12 | Retention                                  | Saved sessions encrypted, 7-day expiry, deleted early if the carrier rejects them. Documents not stored at rest: streamed on demand, cached in memory only while the browser session is open (closed after 3 min idle). "Forget me" deletes everything. No PII in logs |
-| Q13 | Concurrent sessions                        | Cap at 3, reject extras with "busy, retry". Each live browser uses hundreds of MB                                                                                                                                                                                      |
-| Q14 | Frontend                                   | Vite React app served from the same Node server (D11-B)                                                                                                                                                                                                                |
-| Q15 | Location / egress                          | Seattle. Render's Oregon region                                                                                                                                                                                                                                        |
-| Q16 | Playwright / anti-bot experience           | Playwright for e2e testing only. Stealth work is new, so the spike gets extra time                                                                                                                                                                                     |
-| Q17 | Headless vs headed                         | Let the spike decide: patched headless first, headed under Xvfb if blocked, stock new-headless as a baseline. See [D2](#d2-browser-and-stealth)                                                                                                                        |
-| Q18 | Status transport                           | SSE for status, POST for the MFA code, 250 ms polling fallback if Render's proxy buffers streams. See [D8](#d8-how-the-frontend-learns-the-job-status)                                                                                                                 |
-| Q19 | Test bar                                   | Unit tests on adapters, e2e against recorded fixtures, CI, and manual testing                                                                                                                                                                                          |
-| Q20 | CI/CD                                      | GitHub Actions CI on PRs; Render auto-deploy on merge to `main` after checks pass                                                                                                                                                                                      |
+| #   | Question                                   | Answer / decision                                                                                                                                                                                                                                                                   |
+| --- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | How does Progressive MFA arrive?           | SMS; "remember this device" is offered. Saving the device-trust cookie after the first MFA should let repeat runs skip MFA                                                                                                                                                          |
+| Q2  | Lender's carrier and timing                | **Open.** Who, which carrier (not Progressive), and when they can send the login                                                                                                                                                                                                    |
+| Q3  | Budget                                     | Free first, a few dollars at most, no vendors. Start with the host's own IP; a small pay-as-you-go proxy only if the spike is blocked. Cheapest paid Render instance is OK                                                                                                          |
+| Q4  | Cloud                                      | Render: long-lived Docker web services fit D4-B. Free instance is out (sleeps, too little RAM)                                                                                                                                                                                      |
+| Q5  | Store passwords?                           | Never (D7-A). Saved cookies plus the device-trust token give session reuse without the password                                                                                                                                                                                     |
+| Q6  | What the 8 s covers                        | Assume 2 s for the human's MFA typing; the clock stops at the first document on screen. Measure "first document on screen" (headline) and "full list loaded" separately; state both in the README                                                                                   |
+| Q7  | Which documents                            | ID cards first, timed; fall back to the declarations page for policies without an ID card (home, renters). Everything else loads lazily                                                                                                                                             |
+| Q8  | TypeScript, and a Python worker if needed? | Yes to both. TypeScript throughout, Python worker as fallback                                                                                                                                                                                                                       |
+| Q9  | Deadline                                   | 2 days, up to 20 hours of work. Points to D4-B: one container, no worker pool or queue                                                                                                                                                                                              |
+| Q10 | Who uses the hosted URL?                   | Reviewers too. One shared access code (env var), entered once and kept in a signed cookie, plus a per-IP rate limit on login. No user accounts                                                                                                                                      |
+| Q11 | Recognizing a returning user               | Random ID in a signed browser cookie + carrier + hash of the username; all must match. Username alone would let anyone who types it get the session                                                                                                                                 |
+| Q12 | Retention                                  | Saved sessions encrypted, 7-day expiry, deleted early if the carrier rejects them. Documents not stored at rest: streamed on demand, cached in memory only for 10 minutes after fetching (the browser closes as soon as they're in). "Forget me" deletes everything. No PII in logs |
+| Q13 | Concurrent sessions                        | Cap at 3, reject extras with "busy, retry". Each live browser uses hundreds of MB                                                                                                                                                                                                   |
+| Q14 | Frontend                                   | Vite React app served from the same Node server (D11-B)                                                                                                                                                                                                                             |
+| Q15 | Location / egress                          | Seattle. Render's Oregon region                                                                                                                                                                                                                                                     |
+| Q16 | Playwright / anti-bot experience           | Playwright for e2e testing only. Stealth work is new, so the spike gets extra time                                                                                                                                                                                                  |
+| Q17 | Headless vs headed                         | Let the spike decide: patched headless first, headed under Xvfb if blocked, stock new-headless as a baseline. See [D2](#d2-browser-and-stealth)                                                                                                                                     |
+| Q18 | Status transport                           | SSE for status, POST for the MFA code, 250 ms polling fallback if Render's proxy buffers streams. See [D8](#d8-how-the-frontend-learns-the-job-status)                                                                                                                              |
+| Q19 | Test bar                                   | Unit tests on adapters, e2e against recorded fixtures, CI, and manual testing                                                                                                                                                                                                       |
+| Q20 | CI/CD                                      | GitHub Actions CI on PRs; Render auto-deploy on merge to `main` after checks pass                                                                                                                                                                                                   |
 
 ## Architecture
 
@@ -106,19 +106,19 @@ restores encrypted sessions in the store.
 
 ### Decisions
 
-| Decision               | Pick                                                                                            | Status                               | Based on                                            |
-| ---------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------- |
-| D1 Automation          | B: browser for login and MFA, then document calls made from inside the page                     | Proposed; spike confirms per carrier | Latency (Q6), keeping the browser's TLS fingerprint |
-| D2 Browser and stealth | C: patched headless, falling back to D (headed under Xvfb); B as baseline                       | Proposed; spike confirms             | Q17                                                 |
-| D3 Egress IP           | A: Render's own IP, with a pinned proxy as the paid fallback                                    | Proposed; spike confirms             | Q3 budget                                           |
-| D4 Hosting             | B: one long-running Docker container on Render's cheapest paid instance, Oregon                 | Decided                              | Q3, Q4, Q9, Q15                                     |
-| D5 MFA session hold    | A: in-process map of live browser contexts                                                      | Decided                              | Follows from D4                                     |
-| D6 Saved sessions      | B: encrypted SQLite on a Render persistent disk, behind a SessionStore interface (Redis later)  | Decided                              | Q11, Q12, D4                                        |
-| D7 Credentials         | A: never stored; held in memory only during login                                               | Decided                              | Q5                                                  |
-| D8 Status updates      | SSE for status, POST for the MFA code                                                           | Decided                              | Q18                                                 |
-| D9 Documents           | C + A: list first, the first ID card fetched eagerly, the rest lazily, all streamed, not stored | Decided                              | Q6, Q7, Q12                                         |
-| D10 Browser lifecycle  | B: one warm Chromium process, a fresh context per session                                       | Decided                              | Q6, Q13                                             |
-| D11 Frontend           | B: Vite React app served by the same server                                                     | Decided                              | Q14                                                 |
+| Decision               | Pick                                                                                                                           | Status                               | Based on                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ | --------------------------------------------------- |
+| D1 Automation          | B: browser for login and MFA, then document calls made from inside the page                                                    | Proposed; spike confirms per carrier | Latency (Q6), keeping the browser's TLS fingerprint |
+| D2 Browser and stealth | C: patched headless, falling back to D (headed under Xvfb); B as baseline                                                      | Proposed; spike confirms             | Q17                                                 |
+| D3 Egress IP           | A: Render's own IP, with a pinned proxy as the paid fallback                                                                   | Proposed; spike confirms             | Q3 budget                                           |
+| D4 Hosting             | B: one long-running Docker container on Render's cheapest paid instance, Oregon                                                | Decided                              | Q3, Q4, Q9, Q15                                     |
+| D5 MFA session hold    | A: in-process map of live browser contexts                                                                                     | Decided                              | Follows from D4                                     |
+| D6 Saved sessions      | B: encrypted SQLite on a Render persistent disk, behind a SessionStore interface (Redis later)                                 | Decided                              | Q11, Q12, D4                                        |
+| D7 Credentials         | A: never stored; held in memory only during login                                                                              | Decided                              | Q5                                                  |
+| D8 Status updates      | SSE for status, POST for the MFA code                                                                                          | Decided                              | Q18                                                 |
+| D9 Documents           | C + A: list first, first ID card eagerly, the rest prefetched in the background, then the browser closes; memory only (10 min) | Decided                              | Q6, Q7, Q12                                         |
+| D10 Browser lifecycle  | B: one warm Chromium process, a fresh context per session                                                                      | Decided                              | Q6, Q13                                             |
+| D11 Frontend           | B: Vite React app served by the same server                                                                                    | Decided                              | Q14                                                 |
 
 **Render constraints (checked Nov 2026):** persistent disks work on any paid instance, Starter
 included, not on Free, so D6-B stands. Accepted costs: no zero-downtime deploys (a few seconds of
@@ -210,15 +210,35 @@ a reason and whether a retry makes sense, then closes the browser context.
 6. **First document.** `adapter.listDocuments` → `documents_listed`; the UI shows the list. The
    first ID card is fetched right away into an in-memory cache, then `document_ready`. The UI
    renders it inline from `GET /api/documents/:id`. **The latency clock stops here.**
-7. **The rest, lazily.** Other documents are fetched on click through the same live context. The
-   context closes after 3 minutes idle, freeing its slot. A later click reopens it from the saved
-   session (fast path, about 1 s).
+7. **The rest, in the background.** Right after the first ID card is shown, the other documents
+   are fetched into an in-memory cache, then the browser context closes and frees its slot. Clicks
+   are served from the cache. If the cache has expired (10 minutes), a click reopens the session
+   from the saved state (fast path, about 1 s, no login or MFA).
 
-**Capacity.** The cap is on live browser contexts at the same moment, not on users. Counted: a
-login in progress, an open session within its 3-minute idle window, and a pre-warmed login page
-(closed after 2 minutes unused). SSE streams, page loads and API calls don't count. The cap is one
-config value (`MAX_SESSIONS`), set from measured memory per session. Beyond that, scale means the
-worker-pool design (alternative B).
+**Capacity (measured on Render, 2026-11-11; see `docs/spike.md`).** Each live browser session
+costs about 160-185 MB: the Starter container (512 MB) measured 137 MB with the browser up, 320 MB
+with one session and 481 MB (94%) with two, and an unguarded run was killed for running out of
+memory. So `MAX_SESSIONS` = **1 on Starter**. The cap counts live browser contexts at the same
+moment, not users: any number of people can use the app one after another. Two rules keep the cap
+nearly invisible:
+
+- **Wait in line instead of failing.** A login that arrives while every slot is busy waits up to
+  `QUEUE_WAIT_S` (default 30 s), with a `status` event saying it is queued, and gets `BUSY` (429)
+  only if the wait runs out. First in, first out, at most 5 waiters.
+- **Release the slot as soon as the documents are in.** After the first ID card is shown, the
+  remaining documents are fetched in the background into memory, then the context closes. A
+  session holds the slot for login, MFA and fetch, not for an idle window.
+
+Counted toward the cap: a login in progress and a pre-warmed login page (closed after 2 minutes
+unused). SSE streams, page loads and API calls don't count.
+
+**Decision: stay on Starter, no plan upgrade** (including for the review period). One session at a
+time, with queuing and early release, is the accepted limit. For future scaling only: a larger
+plan fits about (80% of its memory - 140 MB) / 170 MB sessions, set with the one config value
+`MAX_SESSIONS`; beyond that, scale means the worker-pool design (alternative B).
+
+Contract note: the "queued" state needs a new `queued` value in `SessionStatus`
+(`packages/contracts`) and in the server's state machine.
 
 ### Latency budget
 
@@ -290,7 +310,7 @@ Passwords are never stored, and nothing sensitive is kept unencrypted. OWASP bas
 | Interception in transit                             | HTTPS everywhere (Render terminates TLS). Cookies `Secure` and `SameSite=Lax`                                                          |
 | CSRF and common web attacks                         | SameSite cookies, JSON-only POST bodies, security headers (koa-helmet), zod validation on every input                                  |
 | PII leaking through logs, fixtures or screenshots   | Log redaction is unit-tested. Fixtures scrubbed before commit. Failure screenshots off in production; in development they mask inputs  |
-| Documents at rest                                   | Not stored: cached in memory only while the browser session is open (closed after 3 minutes idle)                                      |
+| Documents at rest                                   | Not stored: cached in memory only for 10 minutes after fetching (the browser closes as soon as they're in)                             |
 | Leaked secrets in the repo                          | Secrets only in Render env vars and a gitignored `.env`. gitleaks runs in CI                                                           |
 
 ## Deployment, CI/CD and observability
@@ -498,7 +518,9 @@ separate worker pool.
 | B. Download once, store encrypted, serve from there          | Fast re-open. Works after the session expires | PII at rest. Retention rules                         |
 | **C. List first, fetch each PDF lazily on click**            | First content on screen fastest               | "Document on screen" may then mean the list          |
 
-Picked C + A: list first, the first ID card fetched eagerly, the rest lazily, all streamed.
+Picked C + A: list first, the first ID card fetched eagerly, the rest prefetched in the background
+so the browser can close and free its slot (capacity is 1 session on Starter). Documents stay in
+memory for 10 minutes, never on disk.
 
 ### D10. Browser lifecycle
 
