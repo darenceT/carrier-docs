@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { z } from 'zod';
+import { isValidSessionKey } from './crypto.js';
 
 const BROWSER_STRATEGIES = [
   'stock-headless',
@@ -8,8 +9,9 @@ const BROWSER_STRATEGIES = [
   'patched-headed',
 ] as const;
 
-const base64Key32 = z.string().refine((v) => Buffer.from(v, 'base64').length === 32, {
-  message: 'must be 32 random bytes encoded as base64',
+// Strict: canonical base64 of exactly 32 bytes, not all zeros. Lenient decoding would accept junk.
+const base64Key32 = z.string().refine(isValidSessionKey, {
+  message: 'must be 32 random bytes encoded as base64 (44 characters)',
 });
 
 const bool = z.enum(['true', 'false']).transform((v) => v === 'true');

@@ -10,7 +10,8 @@ Retrieves insurance policy documents (ID cards first) from carrier portals.
 Requires Node 24.
 
 ```sh
-cp .env.example .env      # then fill in real local secrets
+cp .env.example .env      # then replace SESSION_KEY with a real key:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 npm ci
 npm run dev               # Koa server on :3000 (tsx watch)
 npm run dev:web           # Vite dev server, proxies the API to :3000
@@ -33,4 +34,7 @@ npm run test:e2e          # Playwright, builds and starts the app on :3100
 `render.yaml` defines the Render service (Docker, Starter plan, 1 GB disk at `/var/data`).
 Render deploys automatically once CI checks pass on `main`.
 
-Health checks: `GET /healthz` and `GET /healthz/disk` (write/read test on the data disk).
+The server validates every environment variable at startup and exits with a list of the
+problems (variable names only, never values) if any is missing or malformed.
+
+Health check: `GET /healthz`.

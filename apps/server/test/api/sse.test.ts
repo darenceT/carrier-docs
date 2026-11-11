@@ -17,7 +17,8 @@ afterEach(async () => {
 });
 
 async function listen(h: Harness): Promise<string> {
-  server = http.createServer(h.app.callback());
+  const handle = h.app.callback();
+  server = http.createServer((req, res) => void handle(req, res));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }

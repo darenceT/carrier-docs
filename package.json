@@ -16,12 +16,13 @@
     "dev:web": "npm run dev -w apps/web",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "build": "npm run build -w apps/web && npm run build -w packages/mock-portal && npm run build -w apps/server",
-    "start": "node apps/server/dist/index.js"
+    "start": "node apps/server/dist/index.js",
+    "spike": "npm run spike -w apps/server --"
   },
   "repository": {
     "type": "git",

@@ -118,17 +118,62 @@ describe('SqliteSessionStore at rest', () => {
     expect(rows[0]?.blob).not.toContain('very-secret-cookie');
   });
 
-  it('treats a row it cannot decrypt (rotated key) as missing and removes it', async () => {
+  const rowCount = () => {
+    const raw = new Database(path.join(dataDir, 'sessions.db'), { readonly: true });
+    const n = (raw.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+    raw.close();
+    return n;
+  };
+
+  it('treats a row it cannot decrypt (wrong key) as missing, reports it, and keeps it', async () => {
     const a = new SqliteSessionStore(dataDir, createCipher(key), clock);
     await a.put('k1', 'owner-a', session(), HOUR);
     await a.close();
-    const b = new SqliteSessionStore(
+
+    let undecryptable = 0;
+    const wrong = new SqliteSessionStore(
       dataDir,
       createCipher(randomBytes(32).toString('base64')),
       clock,
+      { onUndecryptable: () => undecryptable++ },
     );
-    expect(await b.get('k1')).toBeUndefined();
-    expect(await b.purgeExpired()).toBe(0);
-    await b.close();
+    expect(await wrong.get('k1')).toBeUndefined();
+    expect(undecryptable).toBe(1);
+    await wrong.close();
+    expect(rowCount()).toBe(1);
+
+    // Once the right key is back, nothing was lost.
+    const fixed = new SqliteSessionStore(dataDir, createCipher(key), clock);
+    expect(await fixed.get('k1')).toEqual(session());
+    await fixed.close();
+  });
+
+  it("won't decrypt a blob copied into another user's row", async () => {
+    const s = new SqliteSessionStore(dataDir, createCipher(key), clock);
+    await s.put('user-b', 'owner-b', session('b-cookie'), HOUR);
+    await s.put('user-a', 'owner-a', session('a-cookie'), HOUR);
+    await s.close();
+
+    const raw = new Database(path.join(dataDir, 'sessions.db'));
+    raw
+      .prepare('UPDATE sessions SET blob = (SELECT blob FROM sessions WHERE key = ?) WHERE key = ?')
+      .run('user-b', 'user-a');
+    raw.close();
+
+    const again = new SqliteSessionStore(dataDir, createCipher(key), clock);
+    expect(await again.get('user-a')).toBeUndefined();
+    expect(await again.get('user-b')).toEqual(session('b-cookie'));
+    await again.close();
+  });
+
+  it('stores only a keyed hash of the owner ID', async () => {
+    const s = new SqliteSessionStore(dataDir, createCipher(key), clock);
+    await s.put('k1', 'browser-cookie-id-123', session(), HOUR);
+    await s.close();
+    const raw = new Database(path.join(dataDir, 'sessions.db'), { readonly: true });
+    const rows = raw.prepare('SELECT owner_id FROM sessions').all() as Array<{ owner_id: string }>;
+    raw.close();
+    expect(rows[0]?.owner_id).not.toContain('browser-cookie-id-123');
+    expect(rows[0]?.owner_id).toMatch(/^[0-9a-f]{64}$/);
   });
 });

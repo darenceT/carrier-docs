@@ -28,7 +28,6 @@ export function makeHarness(overrides: Partial<ApiDeps> = {}): Harness {
   });
   const logger = createLogger({ level: 'trace', destination });
   const app = createApp({
-    dataDir: '/nonexistent',
     api: {
       sessions,
       accessCode: ACCESS_CODE,

@@ -57,4 +57,13 @@ describe('loadConfig', () => {
   it('rejects an unknown browser strategy', () => {
     expect(() => loadConfig({ ...validEnv(), PROGRESSIVE_BROWSER: 'magic' })).toThrow(ConfigError);
   });
+
+  it.each([
+    ['junk before a valid key', '!!!!' + randomBytes(32).toString('base64')],
+    ['an all-zero key', Buffer.alloc(32).toString('base64')],
+    ['url-safe base64', 'A'.repeat(42) + '-_'],
+    ['a 33-byte key', randomBytes(33).toString('base64')],
+  ])('rejects SESSION_KEY that is %s', (_label, SESSION_KEY) => {
+    expect(() => loadConfig({ ...validEnv(), SESSION_KEY })).toThrow(/SESSION_KEY/);
+  });
 });

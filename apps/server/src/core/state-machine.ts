@@ -4,14 +4,19 @@ import { AppError, type ErrorCode } from './errors.js';
  * The login session state machine: a pure function, (state, event) -> new state.
  * No I/O, no timers. The SessionManager feeds it events and acts on the result.
  *
- *   idle -> prewarming -> logging_in -> mfa_required <-> verifying_mfa -> fetching_docs
- *        \______________/       \_______________ (no MFA) ______________/      |
- *   idle --(saved session valid)----------------------------------------> fetching_docs
- *   fetching_docs -> document_ready -> done          any active state -> failed
+ *   idle | prewarming -> checking_session --(saved session valid)--> fetching_docs
+ *                                \--(missing or rejected)--> logging_in
+ *   idle | prewarming -> logging_in -> mfa_required <-> verifying_mfa --> fetching_docs
+ *                                 \______________ (no MFA) _____________/
+ *   fetching_docs -> document_ready -> done             any active state -> failed
+ *
+ * checking_session holds a browser context (it opens one to test the saved session), so it
+ * counts toward MAX_SESSIONS like every other non-idle, non-terminal state.
  */
 export const STATUSES = [
   'idle',
   'prewarming',
+  'checking_session',
   'logging_in',
   'mfa_required',
   'verifying_mfa',
@@ -35,8 +40,12 @@ export interface SessionState {
 export type SessionEvent =
   | { type: 'PREWARM' }
   | { type: 'START_LOGIN' }
-  /** A saved session was found and accepted by the carrier: skip login and MFA. */
+  /** A saved session exists for this reuse key: open it and test it before logging in. */
+  | { type: 'CHECK_SAVED_SESSION' }
+  /** The saved session was accepted by the carrier: skip login and MFA. */
   | { type: 'FAST_PATH_HIT' }
+  /** The saved session was rejected or expired: fall back to a full login. */
+  | { type: 'FAST_PATH_MISS' }
   | { type: 'LOGIN_OK' }
   | { type: 'MFA_REQUESTED' }
   | { type: 'MFA_SUBMITTED' }
@@ -61,7 +70,9 @@ const TRANSITIONS: Record<
 > = {
   PREWARM: { idle: 'prewarming' },
   START_LOGIN: { idle: 'logging_in', prewarming: 'logging_in' },
-  FAST_PATH_HIT: { idle: 'fetching_docs' },
+  CHECK_SAVED_SESSION: { idle: 'checking_session', prewarming: 'checking_session' },
+  FAST_PATH_HIT: { checking_session: 'fetching_docs' },
+  FAST_PATH_MISS: { checking_session: 'logging_in' },
   LOGIN_OK: { logging_in: 'fetching_docs' },
   MFA_REQUESTED: { logging_in: 'mfa_required' },
   MFA_SUBMITTED: { mfa_required: 'verifying_mfa' },
@@ -74,6 +85,16 @@ const TRANSITIONS: Record<
     document_ready: 'done',
   },
 };
+
+/**
+ * Whether `event` is valid in `state`. The SessionManager uses this to ignore late events
+ * (for example an MFA timeout that fires after the session already finished) instead of throwing.
+ */
+export function canTransition(state: SessionState, event: SessionEvent): boolean {
+  if (isTerminal(state)) return false;
+  if (event.type === 'FAIL') return true;
+  return TRANSITIONS[event.type][state.status] !== undefined;
+}
 
 export function transition(state: SessionState, event: SessionEvent): SessionState {
   if (isTerminal(state)) {

@@ -271,6 +271,7 @@ export function screenOf(state: State): Screen {
 const STATUS_TEXT: Record<SessionStatus, string> = {
   idle: 'Idle',
   prewarming: 'Opening the carrier site',
+  checking_session: 'Checking your saved login',
   logging_in: 'Logging in',
   mfa_required: 'Waiting for your verification code',
   verifying_mfa: 'Checking the code',

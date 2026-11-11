@@ -26,11 +26,12 @@ export class ApiError extends Error {
 }
 
 const ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
-  'INVALID_CREDENTIALS',
-  'MFA_REQUIRED',
+  'BAD_CREDENTIALS',
   'MFA_INVALID',
   'MFA_TIMEOUT',
-  'BLOCKED',
+  'CARRIER_BLOCKED',
+  'CARRIER_CHALLENGE',
+  'CARRIER_PAGE_CHANGED',
   'CARRIER_UNAVAILABLE',
   'SESSION_EXPIRED',
   'BUSY',
@@ -128,11 +129,13 @@ export function toApiError(err: unknown): ApiError {
 }
 
 const FRIENDLY: Record<ErrorCode, string> = {
-  INVALID_CREDENTIALS: 'The carrier did not accept that username or password.',
-  MFA_REQUIRED: 'The carrier wants a verification code.',
+  BAD_CREDENTIALS: 'The carrier did not accept that username or password.',
   MFA_INVALID: 'That verification code was not accepted.',
   MFA_TIMEOUT: 'The verification code was not entered in time.',
-  BLOCKED: 'The carrier blocked this automated login. Try again later.',
+  CARRIER_BLOCKED: 'The carrier blocked this automated login. Try again later.',
+  CARRIER_CHALLENGE:
+    'The carrier asked for a check we cannot complete automatically. Try again later.',
+  CARRIER_PAGE_CHANGED: 'The carrier changed its site and this login needs an update.',
   CARRIER_UNAVAILABLE: 'The carrier site is not responding right now. Try again shortly.',
   SESSION_EXPIRED: 'This session expired. Start over.',
   BUSY: 'All login slots are busy, try again in a minute.',

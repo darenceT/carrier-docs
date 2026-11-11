@@ -59,8 +59,8 @@ describe('openSessionEvents', () => {
 
   it('closes after failed', () => {
     const { source, events } = open();
-    source.fire('failed', { code: 'BLOCKED', message: 'm', retryable: false });
-    expect(events[0]).toMatchObject({ type: 'failed', code: 'BLOCKED' });
+    source.fire('failed', { code: 'CARRIER_BLOCKED', message: 'm', retryable: false });
+    expect(events[0]).toMatchObject({ type: 'failed', code: 'CARRIER_BLOCKED' });
     expect(source.closed).toBe(true);
   });
 

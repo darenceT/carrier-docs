@@ -222,12 +222,12 @@ describe('failure', () => {
     let s = run(
       [
         status('logging_in'),
-        { type: 'failed', code: 'INVALID_CREDENTIALS', message: 'nope', retryable: true },
+        { type: 'failed', code: 'BAD_CREDENTIALS', message: 'nope', retryable: true },
       ],
       started(),
     );
     expect(screenOf(s)).toBe('failed');
-    expect(s.failure).toEqual({ code: 'INVALID_CREDENTIALS', message: 'nope', retryable: true });
+    expect(s.failure).toEqual({ code: 'BAD_CREDENTIALS', message: 'nope', retryable: true });
     expect(s.finished).toBe(true);
 
     // Events after the end are ignored.

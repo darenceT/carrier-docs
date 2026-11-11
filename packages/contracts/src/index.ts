@@ -22,11 +22,12 @@
 
 /** Mirrors ERROR_CODES in apps/server/src/core/errors.ts. */
 export type ErrorCode =
-  | 'INVALID_CREDENTIALS'
-  | 'MFA_REQUIRED'
+  | 'BAD_CREDENTIALS'
   | 'MFA_INVALID'
   | 'MFA_TIMEOUT'
-  | 'BLOCKED'
+  | 'CARRIER_BLOCKED'
+  | 'CARRIER_CHALLENGE'
+  | 'CARRIER_PAGE_CHANGED'
   | 'CARRIER_UNAVAILABLE'
   | 'SESSION_EXPIRED'
   | 'BUSY'
@@ -44,6 +45,7 @@ export interface ErrorBody {
 export type SessionStatus =
   | 'idle'
   | 'prewarming'
+  | 'checking_session'
   | 'logging_in'
   | 'mfa_required'
   | 'verifying_mfa'
