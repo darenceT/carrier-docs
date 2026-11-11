@@ -185,9 +185,16 @@ A repeat run takes the fast path: the saved session is checked first, which skip
 MFA. Every state change goes to the UI as an SSE event. A failure at any step sends `failed` with
 a reason and whether a retry makes sense, then closes the browser context.
 
-1. **Start.** The user picks a carrier and submits credentials: `POST /api/sessions`. The server
-   validates input and checks the session cap (over the cap: `429`, "busy, retry"). It returns a
-   session ID, and the UI opens `GET /api/sessions/:id/events`.
+1. **Start.** Two calls, so the login page can load while the user types.
+   - **Carrier pick:** `POST /api/sessions` with `{ carrier }`. The server checks the session cap
+     (over the cap: `429`, "busy, retry"), returns a session ID and starts pre-warming the login
+     page (`prewarming`). The UI opens `GET /api/sessions/:id/events` right away. Picking a
+     different carrier creates a new session and closes this browser's unused pre-warm, so flipping
+     the dropdown never holds more than one slot. An unused pre-warm closes after 2 minutes; a later
+     login on it gets `SESSION_EXPIRED`, and the UI starts over with a new session.
+   - **Submit:** `POST /api/sessions/:id/login` with `{ username, password }`. The server
+     validates the input and continues from step 2, reusing the pre-warmed page. This call is
+     accepted once per session, and only while it is `idle` or `prewarming`.
 2. **Fast path.** Build the reuse key: browser-cookie ID + carrier + username hash. If the store
    has a saved session for it, open a context with the saved cookies and the same device profile,
    then call `isSessionValid`. Valid: skip to step 6. Expired: delete it and continue.
@@ -470,7 +477,8 @@ REST for commands, SSE for notifications, no message queue.
 
 | Endpoint                       | Style        | Purpose                                                                                                 |
 | ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------- |
-| `POST /api/sessions`           | REST command | Start a login with carrier, username and password; returns a session ID                                 |
+| `POST /api/sessions`           | REST command | Carrier picked: create a session and pre-warm its login page; returns a session ID (`429` at the cap)   |
+| `POST /api/sessions/:id/login` | REST command | Submit username and password; checks for a saved session (fast path), otherwise logs in                 |
 | `GET /api/sessions/:id/events` | SSE stream   | Pushes events such as `logging_in`, `mfa_required`, `fetching_docs`, `document_ready`, `done`, `failed` |
 | `POST /api/sessions/:id/mfa`   | REST command | Submit the MFA code to the live session                                                                 |
 | `GET /api/documents/:id`       | REST read    | Stream one PDF through the backend (lazy loading)                                                       |
