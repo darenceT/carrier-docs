@@ -1,0 +1,15 @@
+{
+  "name": "@carrier-docs/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Types shared by the server and the web app: HTTP API and SSE event shapes. Types only, no runtime code.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

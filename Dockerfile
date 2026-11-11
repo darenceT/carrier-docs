@@ -13,6 +13,7 @@ COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
+COPY packages/contracts/package.json packages/contracts/
 RUN npm ci
 COPY . .
 RUN npm run build \
@@ -28,6 +29,7 @@ COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
+COPY packages/contracts/package.json packages/contracts/
 # Production dependencies, already compiled for this platform in the build stage.
 COPY --from=build /app/node_modules node_modules
 RUN npx -w apps/server patchright install --with-deps chromium \

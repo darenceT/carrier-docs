@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@carrier-docs/contracts": "*",
     "@koa/bodyparser": "^6.1.0",
     "@koa/router": "^15.7.1",
     "better-sqlite3": "^13.0.3",
