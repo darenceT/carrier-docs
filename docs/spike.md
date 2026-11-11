@@ -144,7 +144,23 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
   the link downloaded the PDF in a private window with no cookies, and a new token is issued on
   every page load (so they are likely short-lived). Treat `form_url` as a secret: never log or
   store it, fetch it only to stream the PDF.
-- **Cookie names and expiry** (session lifetime): not yet recorded.
+- **Login cookies** (names and expiry only, read 2026-11-11):
+
+  | Cookie                                     | Likely role                                        | Expires                          |
+  | ------------------------------------------ | -------------------------------------------------- | -------------------------------- |
+  | `customer_session`, `customer_session.sig` | Signed long-lived login (Express `cookie-session`) | 2027-01-10 (about 60 days)       |
+  | `connect.sid`                              | Express server-side session ID                     | 2026-11-12 19:07 UTC (~1.5 days) |
+  | `_lmnd_users_edge_session`                 | Edge/CDN session                                   | Browser close                    |
+
+  Saved browser state includes all of these, browser-close cookies too. Whether reuse lasts ~60
+  days or ~1 day depends on which cookie the server requires. Test without code or the lender:
+  after 2026-11-12 19:07 UTC, open `https://me.lemonade.com/` in the same browser and note whether
+  it is still logged in.
+
+- **Anti-bot:** none of the common bot-manager cookies seen (Akamai `_abck`/`bm_sz`, HUMAN `_px*`,
+  Cloudflare `__cf_bm`, DataDome, Imperva `incap_ses_*`/`reese84`, Kasada). Other cookies were
+  analytics and advertising (e.g. Taboola). Not proof of no detection; the real login from Render
+  settles it.
 
 **D1 for Lemonade:** no page navigation needed after login. Call the policies API from inside the
 logged-in page, then fetch each `form_url` and stream the PDF. Two requests to the first document,
