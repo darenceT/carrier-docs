@@ -351,7 +351,7 @@ describe('error mapping', () => {
 });
 
 describe('rate limiting', () => {
-  const rateLimit = { accessMax: 2, loginMax: 2, windowMs: 60_000 };
+  const rateLimit = { accessMax: 2, loginMax: 2, prewarmMax: 2, windowMs: 60_000 };
 
   it('limits POST /api/access per IP with a RATE_LIMITED ErrorBody', async () => {
     const { app } = makeHarness({ rateLimit });
@@ -387,6 +387,18 @@ describe('rate limiting', () => {
       .set('X-Forwarded-For', '10.0.0.2')
       .send({ code: ACCESS_CODE });
     expect(other.status).toBe(204);
+  });
+
+  it('limits POST /api/sessions/prewarm, separately from logins', async () => {
+    const { authed, sessions } = makeHarness({ rateLimit });
+    const agent = await authed();
+    const statuses: number[] = [];
+    for (let i = 0; i < 3; i++)
+      statuses.push((await agent.post('/api/sessions/prewarm').send({ carrierId: 'demo' })).status);
+    expect(statuses).toEqual([202, 202, 429]);
+    expect(sessions.calls.filter((c) => c.method === 'prewarm')).toHaveLength(2);
+    // Pre-warms used up their own budget, not the login one.
+    expect((await agent.post('/api/sessions').send(login)).status).toBe(202);
   });
 
   it('limits POST /api/sessions', async () => {

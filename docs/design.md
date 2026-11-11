@@ -186,30 +186,33 @@ MFA. Every state change goes to the UI as an SSE event. A failure at any step se
 a reason and whether a retry makes sense, then closes the browser context.
 
 1. **Start.** Two calls, so the login page can load while the user types.
-   - **Carrier pick:** `POST /api/sessions` with `{ carrier }`. The server checks the session cap
-     (over the cap: `429`, "busy, retry"), returns a session ID and starts pre-warming the login
-     page (`prewarming`). The UI opens `GET /api/sessions/:id/events` right away. Picking a
-     different carrier creates a new session and closes this browser's unused pre-warm, so flipping
-     the dropdown never holds more than one slot. An unused pre-warm closes after 2 minutes; a later
-     login on it gets `SESSION_EXPIRED`, and the UI starts over with a new session.
-   - **Submit:** `POST /api/sessions/:id/login` with `{ username, password }`. The server
-     validates the input and continues from step 2, reusing the pre-warmed page. This call is
-     accepted once per session, and only while it is `idle` or `prewarming`.
+   - **Carrier pick:** `POST /api/sessions/prewarm` with `{ carrierId }` returns a pre-warm
+     session ID and starts loading the login page (`prewarming`). It is best effort: the UI
+     ignores failures, and a login works without it, only slower. Each browser has at most one
+     unused pre-warm (picking another carrier closes the previous one), and an unused pre-warm
+     closes quietly after 2 minutes.
+   - **Submit:** `POST /api/sessions` with `{ carrierId, username, password, prewarmSessionId? }`.
+     The server validates the input and checks the session cap (over the cap: `429`, "busy,
+     retry"). It returns a new session ID, and the UI opens `GET /api/sessions/:id/events`.
+     `prewarmSessionId` is a hint, never a reason to fail. It is used only if it belongs to this
+     browser, is for the same carrier, is unused, and step 2 finds no saved session. Otherwise it
+     is closed (or ignored, if unknown or expired) and step 3 opens a fresh context.
 2. **Fast path.** Build the reuse key: browser-cookie ID + carrier + username hash. If the store
    has a saved session for it, open a context with the saved cookies and the same device profile,
    then call `isSessionValid`. Valid: skip to step 6. Expired: delete it and continue.
-3. **Login.** Take a fresh context from the warm pool (device profile + egress), then
+3. **Login.** Use the pre-warmed page if step 1 allowed it (waiting for it if still loading),
+   otherwise take a fresh context from the warm pool (device profile + egress). Then call
    `adapter.login`. The password is dropped from memory once this call returns. `ok` (trusted
    device, no MFA): go to step 5. `mfa_required`: step 4. `bad_credentials`, `blocked` or
    `changed`: send `failed` with that reason.
 4. **MFA.** Send `mfa_required`; the UI shows the code field. The user submits
    `POST /api/sessions/:id/mfa`. The adapter enters the code and ticks "remember this device".
    Wrong code: `mfa_required` again with a message, up to 3 tries. No code within 5 minutes:
-   `failed` (`mfa_timeout`), and the context closes.
+   `failed` (`MFA_TIMEOUT`), and the context closes.
 5. **Save.** Encrypt the session state (cookies, storage, device profile) with a 7-day TTL.
 6. **First document.** `adapter.listDocuments` → `documents_listed`; the UI shows the list. The
    first ID card is fetched right away into an in-memory cache, then `document_ready`. The UI
-   renders it inline from `GET /api/documents/:id`. **The latency clock stops here.**
+   renders it inline from `GET /api/sessions/:id/documents/:docId`. **The latency clock stops here.**
 7. **The rest, lazily.** Other documents are fetched on click through the same live context. The
    context closes after 3 minutes idle, freeing its slot. A later click reopens it from the saved
    session (fast path, about 1 s).
@@ -266,32 +269,32 @@ codes from a real phone, and risk locking the lender's account.
 - **Selectors in their own file**, so a portal redesign shows up as a failing fixture test that
   points at one file.
 
-| Level            | Tool                          | What it covers                                                                                                                                       | Runs in CI                                    |
-| ---------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Unit             | Vitest                        | State machine transitions; timeouts with a fake clock; encrypt/decrypt round trip; reuse-key derivation; log redaction; BlockDetector on saved pages | Yes                                           |
-| Adapter contract | Vitest + Playwright, fixtures | Each adapter's login, MFA, list and fetch against its recorded pages; one shared contract suite every adapter must pass                              | Yes                                           |
-| API integration  | Vitest + supertest            | Endpoints, validation, access gate, rate limit, 429 at the cap, order of SSE events, with a fake adapter                                             | Yes                                           |
-| End to end       | Playwright                    | The React UI through the real server against the mock portal: MFA path, no-MFA path, wrong code, block, repeat-run fast path, "Forget me"            | Yes                                           |
-| Live smoke       | Spike harness script          | Real carriers from the Render deployment; prints timings per step                                                                                    | No: manual, opt-in, failed-login cap enforced |
-| Canary           | Scheduled GitHub Action       | Login pages load without a challenge, without logging in                                                                                             | Daily                                         |
-| Manual           | You                           | Exploratory runs before the Loom                                                                                                                     | —                                             |
+| Level            | Tool                          | What it covers                                                                                                                                                                                                                                       | Runs in CI                                    |
+| ---------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Unit             | Vitest                        | State machine transitions; timeouts with a fake clock; encrypt/decrypt round trip; reuse-key derivation; log redaction; BlockDetector on saved pages                                                                                                 | Yes                                           |
+| Adapter contract | Vitest + Playwright, fixtures | Each adapter's login, MFA, list and fetch against its recorded pages; one shared contract suite every adapter must pass                                                                                                                              | Yes                                           |
+| API integration  | Vitest + supertest            | Endpoints, validation, access gate, rate limits (login and pre-warm), 429 at the cap, order of SSE events, with a fake adapter. SessionManager unit tests: pre-warm reuse, expiry, carrier switch, eviction at the cap, another browser's session ID | Yes                                           |
+| End to end       | Playwright                    | The React UI through the real server against the mock portal: MFA path, no-MFA path, wrong code, block, repeat-run fast path, "Forget me"                                                                                                            | Yes                                           |
+| Live smoke       | Spike harness script          | Real carriers from the Render deployment; prints timings per step                                                                                                                                                                                    | No: manual, opt-in, failed-login cap enforced |
+| Canary           | Scheduled GitHub Action       | Login pages load without a challenge, without logging in                                                                                                                                                                                             | Daily                                         |
+| Manual           | You                           | Exploratory runs before the Loom                                                                                                                                                                                                                     | —                                             |
 
 ## Security
 
 Passwords are never stored, and nothing sensitive is kept unencrypted. OWASP basics, scaled to a
 2-day project.
 
-| Threat                                              | Control                                                                                                                                |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Strangers using the hosted app, credential stuffing | Shared access code from an env var, exchanged for a signed httpOnly cookie. Per-IP rate limits on login (koa-ratelimit). Session cap   |
-| Password exposure                                   | Held in memory only for the login call, then dropped. Never logged (pino redact paths), never written to disk, never in error messages |
-| Theft of saved sessions                             | AES-256-GCM with the key from an env var. 7-day TTL. Deleted when the carrier rejects them. "Forget me" deletes them on demand         |
-| One user getting another's session                  | Reuse key = signed cookie ID + carrier + username hash; all must match. A separate browser context per session                         |
-| Interception in transit                             | HTTPS everywhere (Render terminates TLS). Cookies `Secure` and `SameSite=Lax`                                                          |
-| CSRF and common web attacks                         | SameSite cookies, JSON-only POST bodies, security headers (koa-helmet), zod validation on every input                                  |
-| PII leaking through logs, fixtures or screenshots   | Log redaction is unit-tested. Fixtures scrubbed before commit. Failure screenshots off in production; in development they mask inputs  |
-| Documents at rest                                   | Not stored: cached in memory only while the browser session is open (closed after 3 minutes idle)                                      |
-| Leaked secrets in the repo                          | Secrets only in Render env vars and a gitignored `.env`. gitleaks runs in CI                                                           |
+| Threat                                              | Control                                                                                                                                                                                  |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Strangers using the hosted app, credential stuffing | Shared access code from an env var, exchanged for a signed httpOnly cookie. Per-IP rate limits on access, login and pre-warm (koa-ratelimit). Session cap; logins evict unused pre-warms |
+| Password exposure                                   | Held in memory only for the login call, then dropped. Never logged (pino redact paths), never written to disk, never in error messages                                                   |
+| Theft of saved sessions                             | AES-256-GCM with the key from an env var. 7-day TTL. Deleted when the carrier rejects them. "Forget me" deletes them on demand                                                           |
+| One user getting another's session                  | Reuse key = signed cookie ID + carrier + username hash; all must match. A separate browser context per session                                                                           |
+| Interception in transit                             | HTTPS everywhere (Render terminates TLS). Cookies `Secure` and `SameSite=Lax`                                                                                                            |
+| CSRF and common web attacks                         | SameSite cookies, JSON-only POST bodies, security headers (koa-helmet), zod validation on every input                                                                                    |
+| PII leaking through logs, fixtures or screenshots   | Log redaction is unit-tested. Fixtures scrubbed before commit. Failure screenshots off in production; in development they mask inputs                                                    |
+| Documents at rest                                   | Not stored: cached in memory only while the browser session is open (closed after 3 minutes idle)                                                                                        |
+| Leaked secrets in the repo                          | Secrets only in Render env vars and a gitignored `.env`. gitleaks runs in CI                                                                                                             |
 
 ## Deployment, CI/CD and observability
 
@@ -475,14 +478,23 @@ appears and when the first document is ready.
 
 REST for commands, SSE for notifications, no message queue.
 
-| Endpoint                       | Style        | Purpose                                                                                                 |
-| ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------- |
-| `POST /api/sessions`           | REST command | Carrier picked: create a session and pre-warm its login page; returns a session ID (`429` at the cap)   |
-| `POST /api/sessions/:id/login` | REST command | Submit username and password; checks for a saved session (fast path), otherwise logs in                 |
-| `GET /api/sessions/:id/events` | SSE stream   | Pushes events such as `logging_in`, `mfa_required`, `fetching_docs`, `document_ready`, `done`, `failed` |
-| `POST /api/sessions/:id/mfa`   | REST command | Submit the MFA code to the live session                                                                 |
-| `GET /api/documents/:id`       | REST read    | Stream one PDF through the backend (lazy loading)                                                       |
-| `DELETE /api/me`               | REST command | "Forget me": delete saved sessions                                                                      |
+| Endpoint                                 | Style        | Purpose                                                                                                                 |
+| ---------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/access`                       | REST command | Exchange the access code for a signed httpOnly cookie (the only route open without it)                                  |
+| `GET /api/carriers`                      | REST read    | Carriers for the dropdown                                                                                               |
+| `POST /api/sessions/prewarm`             | REST command | Carrier picked: start loading its login page; returns a pre-warm session ID. Best effort                                |
+| `POST /api/sessions`                     | REST command | Start a login with carrier, username, password and optional `prewarmSessionId`; returns a session ID (`429` at the cap) |
+| `GET /api/sessions/:id/events`           | SSE stream   | Pushes events such as `logging_in`, `mfa_required`, `fetching_docs`, `document_ready`, `done`, `failed`                 |
+| `POST /api/sessions/:id/mfa`             | REST command | Submit the MFA code to the live session                                                                                 |
+| `GET /api/sessions/:id/documents/:docId` | REST read    | Stream one PDF through the backend (lazy loading)                                                                       |
+| `DELETE /api/me`                         | REST command | "Forget me": close live sessions and delete saved ones                                                                  |
+
+Session IDs are bound to the browser's cookie: a session that belongs to another browser answers
+exactly like an unknown one (`404 NOT_FOUND`), so IDs can't be probed. An unknown carrier or a
+malformed body is `400 VALIDATION_FAILED`. Both `POST` routes under `/api/sessions` are
+rate limited per IP, each with its own budget. At the cap, a login first closes unused
+pre-warms (this browser's, then the oldest) before answering `429 BUSY`: a real login outranks
+a pre-warm.
 
 The login job runs in the same process as the API. It emits state changes on an in-memory event
 emitter, and the SSE handler forwards them. The server keeps each job's latest state in memory, so

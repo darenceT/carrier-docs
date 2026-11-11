@@ -15,7 +15,7 @@ interface Deps {
 /**
  * The login flow.
  *
- *   POST /api/sessions/prewarm               { carrierId } -> 202 SessionCreated
+ *   POST /api/sessions/prewarm               { carrierId } -> 202 SessionCreated (rate limited)
  *   POST /api/sessions                       StartSessionRequest -> 202 SessionCreated (rate limited)
  *   GET  /api/sessions/:sessionId/events     text/event-stream of SessionEvent
  *   POST /api/sessions/:sessionId/mfa        { code } -> 202
@@ -23,7 +23,7 @@ interface Deps {
 export function sessionRoutes({ sessions, limits, heartbeatMs }: Deps): ApiRouter {
   const router: ApiRouter = new Router({ prefix: '/api/sessions' });
 
-  router.post('/prewarm', prewarm);
+  router.post('/prewarm', rateLimit('prewarm', limits.prewarmMax, limits.windowMs), prewarm);
   router.post('/', rateLimit('login', limits.loginMax, limits.windowMs), startSession);
   router.get('/:sessionId/events', streamEvents);
   router.post('/:sessionId/mfa', submitMfa);

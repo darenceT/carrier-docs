@@ -59,9 +59,35 @@ export interface DocumentContent {
  */
 export interface SessionService {
   listCarriers(): CarrierInfo[];
-  /** Start loading the carrier's login page while the user types. Counts toward the cap. */
+  /**
+   * Start loading the carrier's login page while the user types. Best effort: the UI ignores
+   * failures, and a login works without a pre-warm, only slower.
+   *
+   * - Holds a browser slot. One unused pre-warm per owner: a new one closes the previous.
+   * - Closes after 2 minutes unused, quietly (no `failed` event; nobody is listening).
+   * - Throws AppError('BUSY') at the cap, ('VALIDATION_FAILED') for an unknown carrier.
+   */
   prewarm(ownerId: string, carrierId: string): Promise<{ sessionId: string }>;
-  /** Throws AppError('BUSY') at the cap, ('VALIDATION_FAILED') for an unknown carrier. */
+  /**
+   * Start a login. `input.prewarmSessionId` is a hint, never a reason to fail:
+   *
+   * - It is adopted only if it belongs to `ownerId`, is for the same carrier, is still unused,
+   *   and no saved session exists for the reuse key. A returning user needs a context built
+   *   from the saved device profile instead, so the pre-warm is closed first, and the session
+   *   never holds two slots.
+   * - Unknown, expired, used or another owner's IDs are ignored: a fresh login runs. (Treat
+   *   another owner's ID exactly like an unknown one, so IDs can't be probed.)
+   * - If the pre-warm is still loading, wait for it (bounded by the login timeout). If it
+   *   failed, close it and log in fresh.
+   * - Every call returns a new sessionId, used for events, MFA and documents.
+   *
+   * Capacity: at the cap, close this owner's own unused pre-warm, then the oldest unused
+   * pre-warm of anyone, before throwing AppError('BUSY'). A real login outranks a pre-warm. The
+   * cap check and the slot reservation happen together, with no await in between.
+   *
+   * Throws AppError('BUSY') when every slot is held by a login in progress or an open session,
+   * ('VALIDATION_FAILED') for an unknown carrier.
+   */
   start(ownerId: string, input: StartSessionRequest): Promise<{ sessionId: string }>;
   submitMfa(ownerId: string, sessionId: string, code: string): Promise<void>;
   /** Calls `listener` at once with the current status, then with every later event. */

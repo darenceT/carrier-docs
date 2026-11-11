@@ -82,7 +82,10 @@ export interface StartSessionRequest {
   carrierId: string;
   username: string;
   password: string;
-  /** The sessionId returned by prewarm, if one was made. Optional. */
+  /**
+   * The sessionId returned by prewarm, if one was made. A hint only: if it has expired or can't
+   * be used, the server logs in without it rather than failing.
+   */
   prewarmSessionId?: string;
 }
 

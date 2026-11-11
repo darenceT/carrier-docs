@@ -8,6 +8,11 @@ export interface RateLimitOptions {
   accessMax: number;
   /** Max POST /api/sessions (logins) per IP per window. */
   loginMax: number;
+  /**
+   * Max POST /api/sessions/prewarm per IP per window. Each pre-warm holds a browser slot for up
+   * to 2 minutes, so without a limit one client could keep the cap full with pre-warms.
+   */
+  prewarmMax: number;
   windowMs: number;
 }
 
@@ -26,6 +31,7 @@ export interface ApiDeps {
 export const DEFAULT_RATE_LIMIT: RateLimitOptions = {
   accessMax: 10,
   loginMax: 20,
+  prewarmMax: 30,
   windowMs: 15 * 60 * 1000,
 };
 
