@@ -51,5 +51,6 @@ and BlockDetector labels (blocked, challenge, CAPTCHA, bad credentials, page cha
 1. Never log or print credentials, MFA codes, cookies or document contents. Use the
    redacting pino logger; no `console.*` in server code.
 2. Never run live carrier logins. Only the human runs `scripts/live-*`. Work against
-   fixtures (`fixtures/<carrier>/`) and the mock portal.
+   fixtures (`fixtures/<carrier>/`) and the mock portal. Never point the spike harness
+   (`apps/server/src/scripts/spike.ts`) at a carrier URL either; the human runs it.
 3. Never commit `.env`, `data/` or `fixtures/raw/`. Fixtures must be scrubbed of PII.

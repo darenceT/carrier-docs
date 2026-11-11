@@ -30,7 +30,11 @@ COPY apps/web/package.json apps/web/
 COPY packages/mock-portal/package.json packages/mock-portal/
 # Production dependencies, already compiled for this platform in the build stage.
 COPY --from=build /app/node_modules node_modules
-RUN npx -w apps/server patchright install --with-deps chromium \
+# procps provides `ps`, which the spike harness uses to measure browser memory.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && npx -w apps/server patchright install --with-deps chromium \
  && chmod -R a+rx /ms-playwright \
  && npm cache clean --force \
  && mkdir -p /var/data && chown node:node /var/data

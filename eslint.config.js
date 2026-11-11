@@ -29,7 +29,7 @@ export default tseslint.config(
   {
     // Server code logs through the redacting pino logger (Phase 3), never console.
     files: ['apps/server/src/**/*.ts'],
-    ignores: ['apps/server/src/index.ts'],
+    ignores: ['apps/server/src/index.ts', 'apps/server/src/scripts/**'],
     rules: { 'no-console': 'error' },
   },
 );

@@ -13,3 +13,4 @@ playwright-report/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+spike-results/
