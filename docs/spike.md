@@ -54,15 +54,31 @@ Fill in with measured values, never targets. No credentials, policy numbers or n
 
 ### Bot-check and login-page loads
 
-| Date | Where  | Strategy           | Target            | Verdict | Status | webdriver | DCL ms | Markers |
-| ---- | ------ | ------------------ | ----------------- | ------- | ------ | --------- | ------ | ------- |
-|      | home   | stock-headless     | sannysoft         |         |        |           |        |         |
-|      | home   | stock-new-headless | sannysoft         |         |        |           |        |         |
-|      | home   | patched-headless   | sannysoft         |         |        |           |        |         |
-|      | home   | patched-headless   | Progressive login |         |        |           |        |         |
-|      | Render | stock-headless     | Progressive login |         |        |           |        |         |
-|      | Render | stock-new-headless | Progressive login |         |        |           |        |         |
-|      | Render | patched-headless   | Progressive login |         |        |           |        |         |
+| Date       | Where  | Strategy           | Target            | Verdict | Status | webdriver | DCL ms | Markers |
+| ---------- | ------ | ------------------ | ----------------- | ------- | ------ | --------- | ------ | ------- |
+| 2026-11-11 | home   | stock-headless     | sannysoft         | clean   | 200    | true      | 3414   |         |
+| 2026-11-11 | home   | stock-new-headless | sannysoft         | clean   | 200    | true      | 812    |         |
+| 2026-11-11 | home   | patched-headless   | sannysoft         | clean   | 200    | false     | 874    |         |
+| 2026-11-11 | home   | stock-headless     | CreepJS           | clean   | 200    | true      | 533    |         |
+| 2026-11-11 | home   | stock-new-headless | CreepJS           | clean   | 200    | true      | 338    |         |
+| 2026-11-11 | home   | patched-headless   | CreepJS           | clean   | 200    | false     | 424    |         |
+| 2026-11-11 | home   | stock-headless     | Progressive login | clean   | 200    | true      | 790    |         |
+| 2026-11-11 | home   | stock-new-headless | Progressive login | clean   | 200    | true      | 753    |         |
+| 2026-11-11 | home   | patched-headless   | Progressive login | clean   | 200    | false     | 800    |         |
+|            | Render | stock-headless     | Progressive login |         |        |           |        |         |
+|            | Render | stock-new-headless | Progressive login |         |        |           |        |         |
+|            | Render | patched-headless   | Progressive login |         |        |           |        |         |
+
+Home findings (2026-11-11):
+
+- No page blocked or challenged on load, with any strategy, including Progressive's login page.
+- Stock strategies report `navigator.webdriver = true`; patchright reports `false`. This is the
+  first fingerprint difference between the options and supports patched headless for D2.
+- "Clean" means no block page, challenge text or CAPTCHA frame on load. It does not mean the
+  bot-check pages passed every test (see their screenshots in `spike-results/screens/`), and it
+  does not prove a login will pass: anti-bot scoring usually happens on form submit. The real
+  login from Render settles that.
+- The 3414 ms on the first row is the run's first page load (cold start).
 
 ### Memory on Render (Starter, 512 MB)
 
