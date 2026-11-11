@@ -19,7 +19,7 @@
  *   BROWSER_EXECUTABLE_PATH   optional: launch this browser binary instead of the bundled one
  */
 import { createInterface } from 'node:readline';
-import { chromium, type BrowserContext, type Page, type Response } from 'patchright';
+import { chromium, type BrowserContext, type Locator, type Page, type Response } from 'patchright';
 import {
   StepTimer,
   detectBlock,
@@ -29,6 +29,7 @@ import {
   maskUrl,
   type Outcome,
 } from './live/helpers.js';
+import { describeFields, findVisible, type FieldQuery } from './live/fields.js';
 
 const CONTEXT_OPTIONS = {
   locale: 'en-US',
@@ -91,21 +92,16 @@ async function assertNotBlocked(page: Page, where: string): Promise<void> {
   if (verdict) throw new Stop(verdict, `${where}: ${maskUrl(page.url())}`);
 }
 
-/** The first visible element among several ways of finding a field. */
-async function firstVisible(
-  page: Page,
-  what: string,
-  selectors: string[],
-): Promise<ReturnType<Page['locator']>> {
+/** The first visible field matching the query, on the page or in any frame. */
+async function firstVisible(page: Page, what: string, q: FieldQuery): Promise<Locator> {
   const deadline = Date.now() + STEP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    for (const sel of selectors) {
-      const loc = page.locator(sel).first();
-      if (await loc.isVisible().catch(() => false)) return loc;
-    }
+    const found = await findVisible(page, q);
+    if (found) return found;
     await assertNotBlocked(page, `waiting for ${what}`);
     await page.waitForTimeout(250);
   }
+  console.log(`\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`);
   throw new Stop('CARRIER_PAGE_CHANGED', `couldn't find ${what} on ${maskUrl(page.url())}`);
 }
 
@@ -140,14 +136,17 @@ async function waitForResponseOrBlock(
 }
 
 async function enterCode(page: Page, code: string): Promise<void> {
-  const field = await firstVisible(page, 'the code field', [
-    'input[autocomplete="one-time-code"]',
-    'input[name*="otp" i]',
-    'input[name*="code" i]',
-    'input[id*="code" i]',
-    'input[inputmode="numeric"]',
-    'input[type="tel"]',
-  ]);
+  const field = await firstVisible(page, 'the code field', {
+    css: [
+      'input[autocomplete="one-time-code"]',
+      'input[name*="otp" i]',
+      'input[name*="code" i]',
+      'input[id*="code" i]',
+      'input[inputmode="numeric"]',
+      'input[type="tel"]',
+    ],
+    label: /code|passcode|verification/i,
+  });
   await field.click();
   // Typing (not fill) also works for one-box-per-digit inputs that auto-advance.
   await page.keyboard.type(code, { delay: 60 });
@@ -215,13 +214,21 @@ async function poll<T>(
 async function progressive(page: Page, timer: StepTimer): Promise<void> {
   const pf = trackProgressive(page);
   await page.goto(PROGRESSIVE_LOGIN, { waitUntil: 'domcontentloaded', timeout: STEP_TIMEOUT_MS });
-  const username = await firstVisible(page, 'the username field', [
-    'input[autocomplete="username"]',
-    'input[name*="user" i]',
-    'input[id*="user" i]',
-    'input[type="email"]',
-  ]);
-  const password = await firstVisible(page, 'the password field', ['input[type="password"]']);
+  const username = await firstVisible(page, 'the username field', {
+    css: [
+      'input[autocomplete="username"]',
+      'input[name*="user" i]',
+      'input[id*="user" i]',
+      'input[name*="login" i]',
+      'input[id*="login" i]',
+      'input[type="email"]',
+    ],
+    label: /user ?(name|id)|log ?in id|email/i,
+  });
+  const password = await firstVisible(page, 'the password field', {
+    css: ['input[type="password"]'],
+    label: /password/i,
+  });
   timer.mark('login page ready');
 
   const user = await ask('Progressive username (hidden): ');
@@ -334,11 +341,10 @@ const isPolicies = (r: Response) =>
 
 async function lemonade(page: Page, context: BrowserContext, timer: StepTimer): Promise<void> {
   await page.goto(LEMONADE_LOGIN, { waitUntil: 'domcontentloaded', timeout: STEP_TIMEOUT_MS });
-  const emailField = await firstVisible(page, 'the email field', [
-    'input[type="email"]',
-    'input[name*="email" i]',
-    'input[autocomplete="email"]',
-  ]);
+  const emailField = await firstVisible(page, 'the email field', {
+    css: ['input[type="email"]', 'input[name*="email" i]', 'input[autocomplete="email"]'],
+    label: /e-?mail/i,
+  });
   timer.mark('login page ready');
 
   const email = await ask('Lemonade email (hidden): ');
