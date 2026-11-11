@@ -71,6 +71,19 @@ describe('with the API mounted', () => {
     expect(app.keys).toEqual(['k1']);
   });
 
+  it('logs late app errors through the logger, ignoring closed event streams', () => {
+    const logged: unknown[] = [];
+    const logger = { ...api.logger, error: (obj: unknown) => void logged.push(obj) };
+    const app = createApp({ api: { ...api, logger: logger as typeof api.logger } });
+    const closed = Object.assign(new Error('Premature close'), {
+      code: 'ERR_STREAM_PREMATURE_CLOSE',
+    });
+    app.emit('error', closed);
+    expect(logged).toHaveLength(0);
+    app.emit('error', new Error('boom'));
+    expect(logged).toHaveLength(1);
+  });
+
   it('refuses an empty cookie key list', () => {
     expect(() => createApp({ api: { ...api, cookieKeys: [] } })).toThrow(/cookieKeys/);
   });

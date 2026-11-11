@@ -23,8 +23,10 @@ const schema = z.object({
   SESSION_KEY: base64Key32,
   ACCESS_CODE: z.string().min(8, 'must be at least 8 characters'),
   CANARY_TOKEN: z.string().min(16, 'must be at least 16 characters'),
-  MAX_SESSIONS: z.coerce.number().int().min(1).max(20).default(3),
-  IDLE_TIMEOUT_S: z.coerce.number().int().positive().default(180),
+  // 1 on Render Starter (512 MB): measured ~170 MB per browser session (docs/spike.md).
+  MAX_SESSIONS: z.coerce.number().int().min(1).max(20).default(1),
+  QUEUE_WAIT_S: z.coerce.number().int().positive().default(30),
+  DOCUMENT_CACHE_S: z.coerce.number().int().positive().default(600),
   MFA_TIMEOUT_S: z.coerce.number().int().positive().default(300),
   PREWARM_TIMEOUT_S: z.coerce.number().int().positive().default(120),
   SESSION_TTL_DAYS: z.coerce.number().positive().default(7),
@@ -45,7 +47,10 @@ export interface Config {
   accessCode: string;
   canaryToken: string;
   maxSessions: number;
-  idleTimeoutMs: number;
+  /** How long a login waits in line for a free browser slot. */
+  queueWaitMs: number;
+  /** How long fetched documents stay in memory after the browser closes. */
+  documentCacheMs: number;
   mfaTimeoutMs: number;
   prewarmTimeoutMs: number;
   sessionTtlMs: number;
@@ -84,7 +89,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     accessCode: c.ACCESS_CODE,
     canaryToken: c.CANARY_TOKEN,
     maxSessions: c.MAX_SESSIONS,
-    idleTimeoutMs: c.IDLE_TIMEOUT_S * 1000,
+    queueWaitMs: c.QUEUE_WAIT_S * 1000,
+    documentCacheMs: c.DOCUMENT_CACHE_S * 1000,
     mfaTimeoutMs: c.MFA_TIMEOUT_S * 1000,
     prewarmTimeoutMs: c.PREWARM_TIMEOUT_S * 1000,
     sessionTtlMs: c.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,

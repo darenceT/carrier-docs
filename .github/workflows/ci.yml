@@ -27,14 +27,15 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      # The browser download is cached per lockfile; --with-deps still installs the system
-      # libraries, which aren't cacheable. patchright's browser isn't needed here: no test uses
-      # it yet, and the Docker image installs its own.
+      # Browser downloads are cached per lockfile; --with-deps still installs the system
+      # libraries, which aren't cacheable. Playwright's Chromium runs the tests; patchright's runs
+      # inside the app during e2e (the Demo carrier uses the production browser strategy).
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npx playwright install --with-deps chromium
+      - run: npx -w apps/server patchright install chromium
       # Adapter and pool tests against a real Chromium and the local mock portal (no network).
       - run: npx vitest run apps/server/test/carriers apps/server/test/browser
         env:

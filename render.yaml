@@ -15,9 +15,11 @@ services:
       - key: DATA_DIR
         value: /var/data
       - key: MAX_SESSIONS
-        value: '3'
-      - key: IDLE_TIMEOUT_S
-        value: '180'
+        value: '1'
+      - key: QUEUE_WAIT_S
+        value: '30'
+      - key: DOCUMENT_CACHE_S
+        value: '600'
       - key: MFA_TIMEOUT_S
         value: '300'
       - key: PREWARM_TIMEOUT_S

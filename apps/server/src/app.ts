@@ -3,11 +3,14 @@ import Koa from 'koa';
 import Router from '@koa/router';
 import helmet from 'koa-helmet';
 import serve from 'koa-static';
+import { createMockPortalRouter } from '@carrier-docs/mock-portal';
 import { createApi, type ApiDeps } from './api/index.js';
 
 export interface AppOptions {
   /** Built React app to serve at /, if present. */
   webDistDir?: string;
+  /** Serve the mock carrier portal at /demo-portal (the Demo carrier's "carrier site"). */
+  mockPortal?: boolean;
   /** Mounts the HTTP API under /api. Omitted in tests that only need health checks. */
   api?: ApiDeps & {
     /** Keys for signing cookies (newest first, so keys can be rotated). */
@@ -23,6 +26,12 @@ export function createApp(options: AppOptions = {}): Koa {
     const { cookieKeys, ...deps } = options.api;
     if (cookieKeys.length === 0) throw new Error('api.cookieKeys must not be empty');
     app.keys = cookieKeys;
+    // Koa reports errors after the response started (e.g. a stream) here. Without a listener it
+    // prints them unredacted. A browser closing its event stream is normal, not an error.
+    app.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
+      deps.logger.error({ err }, 'unhandled app error');
+    });
     // Render terminates TLS, so trust X-Forwarded-Proto/-For for ctx.secure and ctx.ip.
     app.proxy = true;
     app.use(
@@ -42,6 +51,11 @@ export function createApp(options: AppOptions = {}): Koa {
   });
 
   app.use(router.routes()).use(router.allowedMethods());
+
+  if (options.mockPortal) {
+    const portal = createMockPortalRouter();
+    app.use(portal.routes()).use(portal.allowedMethods());
+  }
 
   if (options.webDistDir && existsSync(options.webDistDir)) {
     app.use(serve(options.webDistDir));
