@@ -12,8 +12,9 @@ describe('loadConfig', () => {
   it('applies defaults and converts units', () => {
     const c = loadConfig(validEnv());
     expect(c.port).toBe(3000);
-    expect(c.maxSessions).toBe(3);
-    expect(c.idleTimeoutMs).toBe(180_000);
+    expect(c.maxSessions).toBe(1);
+    expect(c.queueWaitMs).toBe(30_000);
+    expect(c.documentCacheMs).toBe(600_000);
     expect(c.mfaTimeoutMs).toBe(300_000);
     expect(c.sessionTtlMs).toBe(7 * 24 * 3600 * 1000);
     expect(c.demoCarrierEnabled).toBe(false);
@@ -24,18 +25,18 @@ describe('loadConfig', () => {
     const c = loadConfig({
       ...validEnv(),
       PORT: '10000',
-      MAX_SESSIONS: '1',
+      MAX_SESSIONS: '2',
       DEMO_CARRIER_ENABLED: 'true',
       CARRIER2_BROWSER: 'patched-headed',
     });
     expect(c.port).toBe(10000);
-    expect(c.maxSessions).toBe(1);
+    expect(c.maxSessions).toBe(2);
     expect(c.demoCarrierEnabled).toBe(true);
     expect(c.browserStrategy.carrier2).toBe('patched-headed');
   });
 
   it('treats empty strings as unset', () => {
-    expect(loadConfig({ ...validEnv(), MAX_SESSIONS: '' }).maxSessions).toBe(3);
+    expect(loadConfig({ ...validEnv(), MAX_SESSIONS: '' }).maxSessions).toBe(1);
   });
 
   it('lists every problem by name, without echoing secret values', () => {

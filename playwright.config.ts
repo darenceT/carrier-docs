@@ -12,7 +12,10 @@ const testSecrets = {
 
 export default defineConfig({
   testDir: 'e2e',
-  fullyParallel: true,
+  // One worker: the server has one browser slot (MAX_SESSIONS=1, as on Render), and the flow
+  // tests depend on who holds it.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'github' : 'list',
@@ -26,6 +29,13 @@ export default defineConfig({
     url: `http://localhost:${PORT}/healthz`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    env: { ...testSecrets, PORT: String(PORT), DATA_DIR: 'data/e2e', LOG_LEVEL: 'warn' },
+    env: {
+      ...testSecrets,
+      PORT: String(PORT),
+      DATA_DIR: 'data/e2e',
+      LOG_LEVEL: 'warn',
+      DEMO_CARRIER_ENABLED: 'true',
+      MAX_SESSIONS: '1',
+    },
   },
 });
