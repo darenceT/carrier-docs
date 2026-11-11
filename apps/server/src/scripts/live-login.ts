@@ -94,11 +94,17 @@ async function assertNotBlocked(page: Page, where: string): Promise<void> {
 
 /** The first visible field matching the query, on the page or in any frame. */
 async function firstVisible(page: Page, what: string, q: FieldQuery): Promise<Locator> {
-  const deadline = Date.now() + STEP_TIMEOUT_MS;
+  const started = Date.now();
+  const deadline = started + STEP_TIMEOUT_MS;
+  let nextNote = started + 10_000;
   while (Date.now() < deadline) {
     const found = await findVisible(page, q);
     if (found) return found;
     await assertNotBlocked(page, `waiting for ${what}`);
+    if (Date.now() >= nextNote) {
+      console.log(`  still looking for ${what} (${Math.round((Date.now() - started) / 1000)} s)`);
+      nextNote += 10_000;
+    }
     await page.waitForTimeout(250);
   }
   console.log(`\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`);

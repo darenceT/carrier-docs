@@ -21,11 +21,43 @@ export function candidates(frame: Frame, q: FieldQuery): Locator[] {
   return found.map((l) => l.first());
 }
 
-/** The first visible match on the page or in any of its frames, checked once. */
+/** Resolves to `fallback` if `p` hasn't settled within `ms`. Some frame queries can hang. */
+export async function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    return await Promise.race([p.catch(() => fallback), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The last two labels of a hostname, e.g. account.apps.progressive.com -> progressive.com. */
+export function baseDomain(url: string): string {
+  try {
+    return new URL(url).hostname.split('.').slice(-2).join('.');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The frames worth searching: the page itself plus frames on the same site. Third-party frames
+ * (ads, analytics, monitoring) are skipped; querying some of them can hang.
+ */
+export function siteFrames(page: Page): Frame[] {
+  const main = page.mainFrame();
+  const site = baseDomain(main.url());
+  return page.frames().filter((f) => f === main || (site !== '' && baseDomain(f.url()) === site));
+}
+
+/** The first visible match on the page or in a same-site frame, checked once. */
 export async function findVisible(page: Page, q: FieldQuery): Promise<Locator | null> {
-  for (const frame of page.frames()) {
+  for (const frame of siteFrames(page)) {
     for (const loc of candidates(frame, q)) {
-      if (await loc.isVisible().catch(() => false)) return loc;
+      if (await within(loc.isVisible(), 1_000, false)) return loc;
     }
   }
   return null;
@@ -68,8 +100,12 @@ const DESCRIBE_FIELDS_JS = `(() => {
  */
 export async function describeFields(page: Page): Promise<string> {
   const lines: string[] = [];
-  for (const frame of page.frames()) {
-    const fields = await frame.evaluate<string[]>(DESCRIBE_FIELDS_JS).catch(() => [] as string[]);
+  for (const frame of siteFrames(page)) {
+    const fields = await within(
+      frame.evaluate<string[]>(DESCRIBE_FIELDS_JS),
+      3_000,
+      [] as string[],
+    );
     if (fields.length) {
       lines.push(`  in ${maskUrl(frame.url())}:`, ...fields.map((f) => `    ${f}`));
     }
