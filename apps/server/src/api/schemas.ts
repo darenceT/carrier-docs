@@ -1,3 +1,4 @@
+import type { LoginField } from '@carrier-docs/contracts';
 import { z } from 'zod';
 
 /** Request validation. Strict objects: unknown keys are rejected, not silently dropped. */
@@ -18,12 +19,26 @@ export const accessSchema = z.strictObject({ code: z.string().min(1).max(256) })
 
 export const prewarmSchema = z.strictObject({ carrierId });
 
-export const startSessionSchema = z.strictObject({
-  carrierId,
+/** Only the carrier ID, read first to find which login fields that carrier declares. */
+export const startSessionCarrierSchema = z.object({ carrierId });
+
+const loginField: Record<LoginField, z.ZodType<string>> = {
   username: z.string().min(1).max(256),
   password: z.string().min(1).max(256),
-  prewarmSessionId: id.optional(),
-});
+  email: z.email().max(256),
+};
+
+/**
+ * The full login body for one carrier: exactly its declared fields, each required. A field the
+ * carrier doesn't use (a password for an email-only carrier) is an unknown key, so it's rejected.
+ */
+export function startSessionSchema(fields: readonly LoginField[]) {
+  return z.strictObject({
+    carrierId,
+    prewarmSessionId: id.optional(),
+    ...Object.fromEntries(fields.map((f) => [f, loginField[f]])),
+  });
+}
 
 export const mfaSchema = z.strictObject({ code: z.string().regex(/^\d{4,10}$/) });
 

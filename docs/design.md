@@ -264,8 +264,8 @@ time, with queuing and early release, is the accepted limit. For future scaling 
 plan fits about (80% of its memory - 140 MB) / 170 MB sessions, set with the one config value
 `MAX_SESSIONS`; beyond that, scale means the worker-pool design (alternative B).
 
-Contract note: the "queued" state needs a new `queued` value in `SessionStatus`
-(`packages/contracts`) and in the server's state machine.
+A queued login is the `queued` status: it holds no slot, and from there it continues to the
+fast-path check or a full login like any other.
 
 ### Latency budget
 

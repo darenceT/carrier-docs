@@ -4,9 +4,10 @@ import { AppError, type ErrorCode } from './errors.js';
  * The login session state machine: a pure function, (state, event) -> new state.
  * No I/O, no timers. The SessionManager feeds it events and acts on the result.
  *
- *   idle | prewarming -> checking_session --(saved session valid)--> fetching_docs
+ *   idle -> queued (every slot busy; waits up to QUEUE_WAIT_S, then FAIL BUSY)
+ *   idle | queued | prewarming -> checking_session --(saved session valid)--> fetching_docs
  *                                \--(missing or rejected)--> logging_in
- *   idle | prewarming -> logging_in -> mfa_required <-> verifying_mfa --> fetching_docs
+ *   idle | queued | prewarming -> logging_in -> mfa_required <-> verifying_mfa --> fetching_docs
  *                                 \______________ (no MFA) _____________/
  *   fetching_docs -> document_ready -> done             any active state -> failed
  *
@@ -15,6 +16,7 @@ import { AppError, type ErrorCode } from './errors.js';
  */
 export const STATUSES = [
   'idle',
+  'queued',
   'prewarming',
   'checking_session',
   'logging_in',
@@ -39,6 +41,8 @@ export interface SessionState {
 
 export type SessionEvent =
   | { type: 'PREWARM' }
+  /** Every browser slot is busy: wait in line for one. Holds no slot while waiting. */
+  | { type: 'QUEUE' }
   | { type: 'START_LOGIN' }
   /** A saved session exists for this reuse key: open it and test it before logging in. */
   | { type: 'CHECK_SAVED_SESSION' }
@@ -69,8 +73,13 @@ const TRANSITIONS: Record<
   Partial<Record<Status, Status>>
 > = {
   PREWARM: { idle: 'prewarming' },
-  START_LOGIN: { idle: 'logging_in', prewarming: 'logging_in' },
-  CHECK_SAVED_SESSION: { idle: 'checking_session', prewarming: 'checking_session' },
+  QUEUE: { idle: 'queued' },
+  START_LOGIN: { idle: 'logging_in', queued: 'logging_in', prewarming: 'logging_in' },
+  CHECK_SAVED_SESSION: {
+    idle: 'checking_session',
+    queued: 'checking_session',
+    prewarming: 'checking_session',
+  },
   FAST_PATH_HIT: { checking_session: 'fetching_docs' },
   FAST_PATH_MISS: { checking_session: 'logging_in' },
   LOGIN_OK: { logging_in: 'fetching_docs' },
@@ -81,6 +90,7 @@ const TRANSITIONS: Record<
   DOCUMENT_READY: { fetching_docs: 'document_ready' },
   CLOSE: {
     idle: 'done',
+    queued: 'done',
     prewarming: 'done',
     document_ready: 'done',
   },
@@ -127,5 +137,5 @@ export function transition(state: SessionState, event: SessionEvent): SessionSta
 
 /** Whether this session currently holds a browser slot (counts toward MAX_SESSIONS). */
 export function holdsBrowserSlot(state: SessionState): boolean {
-  return !isTerminal(state) && state.status !== 'idle';
+  return !isTerminal(state) && state.status !== 'idle' && state.status !== 'queued';
 }

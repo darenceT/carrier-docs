@@ -1,8 +1,15 @@
 import Router from '@koa/router';
-import type { SessionCreated } from '@carrier-docs/contracts';
+import type { SessionCreated, StartSessionRequest } from '@carrier-docs/contracts';
+import { AppError } from '../../core/errors.js';
 import type { SessionService } from '../../core/ports.js';
 import { rateLimit } from '../middleware/rate-limit.js';
-import { mfaSchema, prewarmSchema, sessionParams, startSessionSchema } from '../schemas.js';
+import {
+  mfaSchema,
+  prewarmSchema,
+  sessionParams,
+  startSessionCarrierSchema,
+  startSessionSchema,
+} from '../schemas.js';
 import { streamSessionEvents } from '../sse.js';
 import type { ApiContext, ApiRouter, RateLimitOptions } from '../types.js';
 
@@ -38,7 +45,12 @@ export function sessionRoutes({ sessions, limits, heartbeatMs }: Deps): ApiRoute
   }
 
   async function startSession(ctx: ApiContext): Promise<void> {
-    const input = startSessionSchema.parse(ctx.request.body);
+    const { carrierId } = startSessionCarrierSchema.parse(ctx.request.body);
+    const carrier = sessions.listCarriers().find((c) => c.id === carrierId);
+    if (!carrier) throw new AppError('VALIDATION_FAILED', 'unknown carrier');
+    const input = startSessionSchema(carrier.loginFields).parse(
+      ctx.request.body,
+    ) as StartSessionRequest;
     const { sessionId } = await sessions.start(ctx.state.ownerId, input);
     ctx.status = 202;
     ctx.body = { sessionId } satisfies SessionCreated;

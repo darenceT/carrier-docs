@@ -2,8 +2,10 @@ import type {
   CarrierInfo,
   DocumentMeta,
   ErrorCode,
+  LoginField,
   SessionEvent,
   SessionStatus,
+  StartSessionRequest,
   StepTiming,
 } from '@carrier-docs/contracts';
 
@@ -20,6 +22,7 @@ export interface State {
   carrierId: string;
   prewarmSessionId?: string;
   username: string;
+  email: string;
   /** Only held while the user types; cleared the moment the login POST is sent. */
   password: string;
   loginSubmitting: boolean;
@@ -59,6 +62,7 @@ export const initialState: State = {
   carriers: null,
   carrierId: '',
   username: '',
+  email: '',
   password: '',
   loginSubmitting: false,
   timings: [],
@@ -79,7 +83,7 @@ export type UiAction =
   | { type: 'carriers_failed'; message: string }
   | { type: 'carrier_selected'; carrierId: string }
   | { type: 'prewarmed'; carrierId: string; sessionId: string }
-  | { type: 'field_changed'; field: 'username' | 'password' | 'mfaCode'; value: string }
+  | { type: 'field_changed'; field: LoginField | 'mfaCode'; value: string }
   | { type: 'login_submitted' }
   | { type: 'session_started'; sessionId: string; at: number }
   | { type: 'login_failed'; error: RequestError }
@@ -95,6 +99,28 @@ export type UiAction =
   | { type: 'forget_failed'; message: string };
 
 export type Action = SessionEvent | UiAction;
+
+/** The selected carrier, if the carrier list has loaded and one is chosen. */
+export function selectedCarrier(state: State): CarrierInfo | undefined {
+  return state.carriers?.find((c) => c.id === state.carrierId);
+}
+
+/** Whether every login field the selected carrier declares has been filled in. */
+export function canSubmitLogin(state: State): boolean {
+  const carrier = selectedCarrier(state);
+  return !!carrier && !state.loginSubmitting && carrier.loginFields.every((f) => state[f] !== '');
+}
+
+/**
+ * The login request body: exactly the fields the carrier declares, since the server rejects any
+ * other. Lemonade, for example, gets only an email, never a stale password.
+ */
+export function loginRequest(state: State, carrier: CarrierInfo): StartSessionRequest {
+  const body: StartSessionRequest = { carrierId: carrier.id };
+  for (const f of carrier.loginFields) body[f] = state[f];
+  if (state.prewarmSessionId) body.prewarmSessionId = state.prewarmSessionId;
+  return body;
+}
 
 /** Clears everything about the current session attempt (keeps access, carriers, form choices). */
 function clearSession(state: State): State {
@@ -270,6 +296,7 @@ export function screenOf(state: State): Screen {
 
 const STATUS_TEXT: Record<SessionStatus, string> = {
   idle: 'Idle',
+  queued: 'Waiting for a free login slot',
   prewarming: 'Opening the carrier site',
   checking_session: 'Checking your saved login',
   logging_in: 'Logging in',
