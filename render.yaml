@@ -1,0 +1,41 @@
+# Render Blueprint. Check field names against Render's Blueprint reference before the first deploy.
+services:
+  - type: web
+    name: carrier-docs
+    runtime: docker
+    region: oregon
+    plan: starter
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: MAX_SESSIONS
+        value: '3'
+      - key: IDLE_TIMEOUT_S
+        value: '180'
+      - key: MFA_TIMEOUT_S
+        value: '300'
+      - key: PREWARM_TIMEOUT_S
+        value: '120'
+      - key: SESSION_TTL_DAYS
+        value: '7'
+      - key: DEMO_CARRIER_ENABLED
+        value: 'true'
+      - key: PROGRESSIVE_BROWSER
+        value: patched-headless
+      - key: CARRIER2_BROWSER
+        value: patched-headless
+      - key: LOG_LEVEL
+        value: info
+      # Secrets: Render prompts for these in the dashboard; they never live in the repo.
+      - key: SESSION_KEY
+        sync: false
+      - key: ACCESS_CODE
+        sync: false
+      - key: CANARY_TOKEN
+        sync: false

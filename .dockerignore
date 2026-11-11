@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+.env
+.env.*
+!.env.example
+data
+fixtures/raw
+.git
+test-results
+playwright-report
+docs/ai-sessions
