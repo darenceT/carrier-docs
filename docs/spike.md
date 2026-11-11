@@ -128,9 +128,27 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 
 ### Real login from Render (one attempt, counts against 2 failed logins a day)
 
-| Date | Carrier     | Outcome | Login page ms | Credentials → MFA ms | MFA → logged in ms | Notes |
-| ---- | ----------- | ------- | ------------- | -------------------- | ------------------ | ----- |
-|      | Progressive |         |               |                      |                    |       |
+Run with `live-login` (`apps/server/src/scripts/live-login.ts`) in the Render Shell, patched
+headless, Render's own IP. Times exclude the person typing credentials and codes.
+
+| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                |
+| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29) |
+| —          | Lemonade    |            |                      |          |               | Not run yet                                                                                                                           |
+
+Earlier attempts stopped before anything was typed (field lookup, then an invisible prompt; fixed
+in #21, #26, #27), so none counted as a login attempt.
+
+Findings (Progressive):
+
+- **Anti-bot passed where it matters.** PingFederate accepted the password and the SMS code from
+  Render's datacenter IP with patched headless: flow statuses `AUTHENTICATION_REQUIRED` →
+  `OTP_REQUIRED` → `MFA_COMPLETED` → `DEVICE_PROPERTIES_REQUIRED`, no block page or challenge.
+- **Latency:** about 7.8 s of machine time from opening the login page to the code being accepted,
+  of which 4.8 s is the login page itself (redirects through PingFederate). Pre-warming the page
+  while the user types hides most of that.
+- **Still to confirm:** remember-device, the account API answering, and the repeat-run check (next
+  run, after #29).
 
 ### Portal mapping
 
@@ -249,6 +267,6 @@ which is good for the 8 s budget.
 | Decision                                | Result                                                                                                                                 | Evidence                                                                                                                                                                                                                                                         |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | D1 Automation (in-page document fetch?) | Yes for both. Progressive: in-page API calls, PDF returned as base64 in JSON. Lemonade: one in-page API call, then the bearer PDF link | Progressive: `POST api.progressive.com/policypro/v1/policies/<id>/document` returns the ID card PDF in `documents[]`. Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy, which downloads with no cookies |
-| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                                                                                        |                                                                                                                                                                                                                                                                  |
-| D3 Egress (direct or proxy)             |                                                                                                                                        |                                                                                                                                                                                                                                                                  |
+| D2 Browser (`PROGRESSIVE_BROWSER`)      | Progressive: patched headless                                                                                                          | Real login from Render: password and SMS code accepted, no challenge (2026-11-11). Lemonade pending                                                                                                                                                              |
+| D3 Egress (direct or proxy)             | Progressive: direct (Render's IP)                                                                                                      | Same run: datacenter IP accepted through MFA. Lemonade (Cloudflare) pending                                                                                                                                                                                      |
 | `MAX_SESSIONS`                          | 1 on Starter (512 MB); no plan upgrade (decided)                                                                                       | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                                                                                                                                   |
