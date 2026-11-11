@@ -54,20 +54,22 @@ Fill in with measured values, never targets. No credentials, policy numbers or n
 
 ### Bot-check and login-page loads
 
-| Date       | Where  | Strategy           | Target            | Verdict | Status | webdriver | DCL ms | Markers |
-| ---------- | ------ | ------------------ | ----------------- | ------- | ------ | --------- | ------ | ------- |
-| 2026-11-11 | home   | stock-headless     | sannysoft         | clean   | 200    | true      | 3414   |         |
-| 2026-11-11 | home   | stock-new-headless | sannysoft         | clean   | 200    | true      | 812    |         |
-| 2026-11-11 | home   | patched-headless   | sannysoft         | clean   | 200    | false     | 874    |         |
-| 2026-11-11 | home   | stock-headless     | CreepJS           | clean   | 200    | true      | 533    |         |
-| 2026-11-11 | home   | stock-new-headless | CreepJS           | clean   | 200    | true      | 338    |         |
-| 2026-11-11 | home   | patched-headless   | CreepJS           | clean   | 200    | false     | 424    |         |
-| 2026-11-11 | home   | stock-headless     | Progressive login | clean   | 200    | true      | 790    |         |
-| 2026-11-11 | home   | stock-new-headless | Progressive login | clean   | 200    | true      | 753    |         |
-| 2026-11-11 | home   | patched-headless   | Progressive login | clean   | 200    | false     | 800    |         |
-|            | Render | stock-headless     | Progressive login |         |        |           |        |         |
-|            | Render | stock-new-headless | Progressive login |         |        |           |        |         |
-|            | Render | patched-headless   | Progressive login |         |        |           |        |         |
+| Date       | Where  | Strategy           | Target            | Verdict | Status | webdriver | DCL ms | Markers                                  |
+| ---------- | ------ | ------------------ | ----------------- | ------- | ------ | --------- | ------ | ---------------------------------------- |
+| 2026-11-11 | home   | stock-headless     | sannysoft         | clean   | 200    | true      | 3414   |                                          |
+| 2026-11-11 | home   | stock-new-headless | sannysoft         | clean   | 200    | true      | 812    |                                          |
+| 2026-11-11 | home   | patched-headless   | sannysoft         | clean   | 200    | false     | 874    |                                          |
+| 2026-11-11 | home   | stock-headless     | CreepJS           | clean   | 200    | true      | 533    |                                          |
+| 2026-11-11 | home   | stock-new-headless | CreepJS           | clean   | 200    | true      | 338    |                                          |
+| 2026-11-11 | home   | patched-headless   | CreepJS           | clean   | 200    | false     | 424    |                                          |
+| 2026-11-11 | home   | stock-headless     | Progressive login | clean   | 200    | true      | 790    |                                          |
+| 2026-11-11 | home   | stock-new-headless | Progressive login | clean   | 200    | true      | 753    |                                          |
+| 2026-11-11 | home   | patched-headless   | Progressive login | clean   | 200    | false     | 800    |                                          |
+| 2026-11-11 | Render | stock-headless     | all               | not run | —      | —         | —      | Playwright isn't in the production image |
+| 2026-11-11 | Render | stock-new-headless | all               | not run | —      | —         | —      | Playwright isn't in the production image |
+| 2026-11-11 | Render | patched-headless   | sannysoft         | clean   | 200    | false     | 983    |                                          |
+| 2026-11-11 | Render | patched-headless   | CreepJS           | clean   | 200    | false     | 410    |                                          |
+| 2026-11-11 | Render | patched-headless   | Progressive login | clean   | 200    | false     | 1068   |                                          |
 
 Home findings (2026-11-11):
 
@@ -79,6 +81,16 @@ Home findings (2026-11-11):
   does not prove a login will pass: anti-bot scoring usually happens on form submit. The real
   login from Render settles that.
 - The 3414 ms on the first row is the run's first page load (cold start).
+
+Render findings (2026-11-11):
+
+- Patched headless loads Progressive's login page clean from Render's IP (HTTP 200, no block or
+  challenge, `webdriver = false`), so there is no IP block on page load. The real login settles
+  whether the IP is accepted on submit.
+- Stock strategies weren't run on Render: `playwright` is a dev dependency and isn't in the
+  production image. Not needed for the decision; the home runs already compare them.
+- The harness's per-process memory (583-734 MB) overcounts, because Chromium processes share
+  memory. Use the container's cgroup counters for the memory table instead.
 
 ### Memory on Render (Starter, 512 MB)
 
