@@ -3,8 +3,8 @@
 _Nov 10, 2026. Exported from the Technical Design doc; that doc is the source of truth if the two disagree._
 
 The architecture is drafted: one Docker container on Render, TypeScript throughout, with a
-swappable anti-bot layer. Three choices (D1–D3) wait on the day-one spike, and carrier #2 (Q2)
-is still to be named. Where a choice rests on an answer, the answer is cited.
+swappable anti-bot layer. Three choices (D1–D3) wait on the day-one spike. Carrier #2 is
+Lemonade (Q2). Where a choice rests on an answer, the answer is cited.
 
 > **Reminder:** the AI AgentAdapter is a stretch goal; see [AI agent adapters](#ai-agent-adapters-cost-latency-and-a-combo-design).
 
@@ -59,7 +59,7 @@ All answered except Q2.
 | #   | Question                                   | Answer / decision                                                                                                                                                                                                                                                      |
 | --- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Q1  | How does Progressive MFA arrive?           | SMS; "remember this device" is offered. Saving the device-trust cookie after the first MFA should let repeat runs skip MFA                                                                                                                                             |
-| Q2  | Lender's carrier and timing                | **Open.** Who, which carrier (not Progressive), and when they can send the login                                                                                                                                                                                       |
+| Q2  | Lender's carrier and timing                | **Answered.** Lemonade (renters). Its login is email only, then an SMS code to the lender's phone (confirmed on its login page, 2026-11-11). See "Carrier login methods"                                                                                               |
 | Q3  | Budget                                     | Free first, a few dollars at most, no vendors. Start with the host's own IP; a small pay-as-you-go proxy only if the spike is blocked. Cheapest paid Render instance is OK                                                                                             |
 | Q4  | Cloud                                      | Render: long-lived Docker web services fit D4-B. Free instance is out (sleeps, too little RAM)                                                                                                                                                                         |
 | Q5  | Store passwords?                           | Never (D7-A). Saved cookies plus the device-trust token give session reuse without the password                                                                                                                                                                        |
@@ -129,6 +129,30 @@ Render Key Value is not a better fallback: its free tier is 25 MB with no persis
 probably too small for 3 concurrent sessions. The spike measures memory per session. If it
 doesn't fit, lower the cap to 1–2 on Starter, or move up a plan for the review period only
 (Render bills by the second).
+
+### Carrier login methods
+
+The two carriers log in differently, so the login form is declared per carrier rather than fixed.
+Both end in an SMS code, so the MFA step, the state machine and the SSE events stay as they are.
+
+| Carrier            | Step 1                  | Step 2                                    | Code goes to       |
+| ------------------ | ----------------------- | ----------------------------------------- | ------------------ |
+| Progressive        | Username + password     | SMS code ("remember this device" offered) | Your phone         |
+| Lemonade (renters) | Email only, no password | SMS code                                  | The lender's phone |
+
+Changes this needs (confirmed on Lemonade's login page, 2026-11-11):
+
+- **Contract:** `CarrierInfo` gains `loginFields`, e.g. `['username', 'password']` for Progressive
+  and `['email']` for Lemonade. `StartSessionRequest` makes `password` optional and adds an
+  optional `email`. The API requires exactly the fields the chosen carrier declares.
+- **UI:** the login form renders the fields from `loginFields`; Lemonade shows a single email field.
+- **Adapter:** Lemonade's adapter submits the email, then reports `mfa_required` with a hint such as
+  "Code sent by text". From there the flow is identical to Progressive's.
+- **Saved sessions:** the reuse key uses whichever identifier the carrier logs in with (username or
+  email), hashed the same way.
+- **Operations:** every fresh Lemonade login needs the lender to text you the code, so session reuse
+  matters more for Lemonade. Whether Lemonade offers "remember this device" is checked in its
+  mapping login. The lender must be reachable during the Loom; schedule it.
 
 ### Components and interfaces
 
