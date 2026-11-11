@@ -18,7 +18,6 @@
  * Env:
  *   BROWSER_EXECUTABLE_PATH   optional: launch this browser binary instead of the bundled one
  */
-import { createInterface } from 'node:readline';
 import { chromium, type BrowserContext, type Locator, type Page, type Response } from 'patchright';
 import {
   StepTimer,
@@ -29,6 +28,7 @@ import {
   maskUrl,
   type Outcome,
 } from './live/helpers.js';
+import { ask } from './live/prompt.js';
 import { describeFields, findVisible, type FieldQuery } from './live/fields.js';
 
 const CONTEXT_OPTIONS = {
@@ -52,25 +52,6 @@ class Stop extends Error {
 }
 
 // ---------- terminal input (hidden) ----------
-
-function ask(question: string, hidden = true): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  const internals = rl as unknown as { _writeToOutput: (s: string) => void };
-  let muted = false;
-  internals._writeToOutput = (s: string) => {
-    if (!muted) process.stdout.write(s);
-  };
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    muted = hidden;
-    rl.question('', (answer) => {
-      muted = false;
-      process.stdout.write('\n');
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
 
 // ---------- page helpers ----------
 
@@ -237,8 +218,8 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
   });
   timer.mark('login page ready');
 
-  const user = await ask('Progressive username (hidden): ');
-  const pass = await ask('Progressive password (hidden): ');
+  const user = await ask('Progressive username:');
+  const pass = await ask('Progressive password:');
   timer.skip();
   await username.fill(user);
   await password.fill(pass);
@@ -286,7 +267,7 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
   timer.mark(next === 'otp' ? 'SMS step reached' : 'logged in (device remembered, no SMS)');
   if (next === 'in') return;
 
-  const code = await ask('SMS code from your phone (hidden): ');
+  const code = await ask('SMS code from your phone:');
   timer.skip();
   await enterCode(page, code);
   await clickButton(page, /verify|submit|continue|sign in/i, 'verify-code').catch(() =>
@@ -353,7 +334,7 @@ async function lemonade(page: Page, context: BrowserContext, timer: StepTimer): 
   });
   timer.mark('login page ready');
 
-  const email = await ask('Lemonade email (hidden): ');
+  const email = await ask('Lemonade email:');
   timer.skip();
   await emailField.fill(email);
   const presigned = waitForResponseOrBlock(page, isPresign, 'the email check');
@@ -367,7 +348,7 @@ async function lemonade(page: Page, context: BrowserContext, timer: StepTimer): 
     throw new Stop('BAD_CREDENTIALS', `email check returned HTTP ${presign.status()}`);
   timer.mark('SMS sent to the account phone');
 
-  const code = await ask('SMS code (ask the account holder; hidden): ');
+  const code = await ask('SMS code (ask the account holder):');
   timer.skip();
   const signedIn = waitForResponseOrBlock(page, isSignin, 'the code check', HUMAN_TIMEOUT_MS);
   await enterCode(page, code);
