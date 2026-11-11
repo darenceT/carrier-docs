@@ -128,6 +128,10 @@ describe('session state machine', () => {
     expect(run([{ type: 'QUEUE' }, { type: 'CLOSE' }]).status).toBe('done');
   });
 
+  it('a login with no documents closes from fetching_docs', () => {
+    expect(transition(at('fetching_docs'), { type: 'CLOSE' }).status).toBe('done');
+  });
+
   it('canTransition reports late or invalid events without throwing', () => {
     expect(canTransition(at('done'), { type: 'FAIL', code: 'MFA_TIMEOUT', retryable: true })).toBe(
       false,

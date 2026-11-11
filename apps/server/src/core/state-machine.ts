@@ -92,6 +92,8 @@ const TRANSITIONS: Record<
     idle: 'done',
     queued: 'done',
     prewarming: 'done',
+    // A carrier account with no documents: nothing to show, but not a failure.
+    fetching_docs: 'done',
     document_ready: 'done',
   },
 };
