@@ -69,7 +69,9 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)('BrowserPool with real Chromium'
     expect(await page.evaluate(() => navigator.userAgent)).toBe(fingerprint.userAgent);
 
     // Kill the browser process: the pool should notice, drop its contexts and relaunch.
-    const disconnected = new Promise<void>((resolve) => launched[0]!.once('disconnected', resolve));
+    const disconnected = new Promise<void>((resolve) =>
+      launched[0]!.once('disconnected', () => resolve()),
+    );
     servers[0]!.process().kill('SIGKILL');
     await disconnected;
     expect(pool.stats()).toMatchObject({ launched: false, openContexts: 0, crashes: 1 });
