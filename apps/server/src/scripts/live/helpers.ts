@@ -11,7 +11,9 @@ export type Outcome =
   | 'CARRIER_BLOCKED'
   | 'CARRIER_CHALLENGE'
   | 'CARRIER_PAGE_CHANGED'
-  | 'CARRIER_UNAVAILABLE';
+  | 'CARRIER_UNAVAILABLE'
+  /** A bug or unexpected state in this script, not the carrier. */
+  | 'INTERNAL';
 
 /** Text that bot-protection interstitials show. Same list as the spike, plus Cloudflare's. */
 const BLOCK_PATTERNS: Array<[RegExp, 'CARRIER_BLOCKED' | 'CARRIER_CHALLENGE']> = [

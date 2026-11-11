@@ -29,7 +29,7 @@ import {
   type Outcome,
 } from './live/helpers.js';
 import { ask } from './live/prompt.js';
-import { describeFields, findVisible, type FieldQuery } from './live/fields.js';
+import { describeFields, findVisible, within, type FieldQuery } from './live/fields.js';
 
 const CONTEXT_OPTIONS = {
   locale: 'en-US',
@@ -90,6 +90,29 @@ async function firstVisible(page: Page, what: string, q: FieldQuery): Promise<Lo
   }
   console.log(`\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`);
   throw new Stop('CARRIER_PAGE_CHANGED', `couldn't find ${what} on ${maskUrl(page.url())}`);
+}
+
+/**
+ * Ticks a checkbox that may be custom-styled (the real input hidden under a drawn box, so a normal
+ * click can't reach it). Tries, in order: a normal check, clicking its label, a forced check.
+ * Returns whether it ended up checked. Each attempt is time-boxed.
+ */
+async function tickCheckbox(page: Page, box: Locator): Promise<boolean> {
+  const isChecked = () => within(box.isChecked(), 2_000, false);
+  const attempts: Array<() => Promise<unknown>> = [
+    () => box.check({ timeout: 3_000 }),
+    () =>
+      page
+        .getByText(/remember|trust/i)
+        .first()
+        .click({ timeout: 3_000 }),
+    () => box.check({ force: true, timeout: 3_000 }),
+  ];
+  for (const attempt of attempts) {
+    if (await isChecked()) return true;
+    await attempt().catch(() => undefined);
+  }
+  return isChecked();
 }
 
 async function clickButton(page: Page, name: RegExp, what: string): Promise<void> {
@@ -294,9 +317,14 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
     rememberButton.waitFor({ state: 'visible', timeout: 10_000 }),
   ]).catch(() => undefined);
   if (await remember.isVisible().catch(() => false)) {
-    await remember.check();
-    await clickButton(page, /continue|submit|done|next/i, 'continue');
-    console.log('  remember this device: ticked');
+    const ticked = await tickCheckbox(page, remember);
+    console.log(`  remember this device: ${ticked ? 'ticked' : 'could NOT be ticked'}`);
+    if (!ticked) {
+      console.log(
+        `\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`,
+      );
+    }
+    await clickButton(page, /continue|submit|done|next|save/i, 'continue');
   } else if (await rememberButton.isVisible().catch(() => false)) {
     await rememberButton.click();
     console.log('  remember this device: chosen');
@@ -449,7 +477,7 @@ async function main(): Promise<void> {
       outcome = err.outcome;
       detail = err.detail;
     } else {
-      outcome = 'CARRIER_UNAVAILABLE';
+      outcome = 'INTERNAL';
       detail = (err as Error).message.split('\n')[0] ?? 'unknown error';
     }
   }
