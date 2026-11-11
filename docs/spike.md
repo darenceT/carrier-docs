@@ -118,17 +118,43 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 | ---- | ----------- | ------- | ------------- | -------------------- | ------------------ | ----- |
 |      | Progressive |         |               |                      |                    |       |
 
-### Portal mapping (from `playwright codegen --save-har`, at home)
+### Portal mapping
+
+#### Progressive (from `playwright codegen --save-har`, at home)
 
 - Document list call (method, path pattern, response type):
 - PDF download URL pattern:
 - Can documents be fetched with in-page `fetch`? (decides D1):
 
+#### Lemonade (by hand in DevTools while logged in, 2026-11-11)
+
+- **Login:** email only, then an SMS code to the account holder's phone. Code-page URL and form
+  field names to capture in the scheduled codegen login (submitting the email texts the lender).
+- **Domains:** `me.lemonade.com` (web app), `my.lemonade.com` (JSON API), `icebox.lemonade.com`
+  (document downloads).
+- **Landing page after login:** `https://me.lemonade.com/` (plus a `resetHash` query string).
+- **Policy list and document links, one call:** `GET https://my.lemonade.com/api/v1/web_dashboard/accounts/home/policies`
+  returns JSON; `data.items` is keyed by policy ID (one entry per insured address, two on this
+  account), and each item's `form_url` is that policy's PDF link.
+- **Policy page (UI only):** `https://me.lemonade.com/policy/<id>`, opened in a new tab from the
+  address dropdown. The automation skips it and uses the API call above.
+- **Documents:** one per policy, the policy PDF ("download a copy of your policy"). Renters has no
+  ID card, so this PDF is the first document shown.
+- **PDF download:** `https://icebox.lemonade.com/tokens/<token>`. The token is a bearer credential:
+  the link downloaded the PDF in a private window with no cookies, and a new token is issued on
+  every page load (so they are likely short-lived). Treat `form_url` as a secret: never log or
+  store it, fetch it only to stream the PDF.
+- **Cookie names and expiry** (session lifetime): not yet recorded.
+
+**D1 for Lemonade:** no page navigation needed after login. Call the policies API from inside the
+logged-in page, then fetch each `form_url` and stream the PDF. Two requests to the first document,
+which is good for the 8 s budget.
+
 ## Decisions
 
-| Decision                                | Result                                                            | Evidence                                                                                       |
-| --------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| D1 Automation (in-page document fetch?) |                                                                   |                                                                                                |
-| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                   |                                                                                                |
-| D3 Egress (direct or proxy)             |                                                                   |                                                                                                |
-| `MAX_SESSIONS`                          | 1 on Starter (512 MB); revisit if the plan is upgraded for review | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed |
+| Decision                                | Result                                                                                          | Evidence                                                                                                                                      |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1 Automation (in-page document fetch?) | Lemonade: yes, one in-page API call, then the bearer PDF link. Progressive: pending its mapping | Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy; the link downloads with no cookies |
+| D2 Browser (`PROGRESSIVE_BROWSER`)      |                                                                                                 |                                                                                                                                               |
+| D3 Egress (direct or proxy)             |                                                                                                 |                                                                                                                                               |
+| `MAX_SESSIONS`                          | 1 on Starter (512 MB); no plan upgrade (decided)                                                | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                |
