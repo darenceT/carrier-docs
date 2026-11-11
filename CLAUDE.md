@@ -34,9 +34,11 @@ browser strategy; the anti-bot layer is selected per carrier in config.
 ## Stable error codes
 
 Every failure maps to one of these codes (extend this list in one place, in `core/`):
-`INVALID_CREDENTIALS`, `MFA_REQUIRED`, `MFA_INVALID`, `MFA_TIMEOUT`, `BLOCKED`,
-`CARRIER_UNAVAILABLE`, `SESSION_EXPIRED`, `BUSY`, `NOT_FOUND`, `UNAUTHORIZED`,
-`RATE_LIMITED`, `VALIDATION_FAILED`, `INTERNAL`.
+`BAD_CREDENTIALS`, `MFA_INVALID`, `MFA_TIMEOUT`, `CARRIER_BLOCKED`, `CARRIER_CHALLENGE`,
+`CARRIER_PAGE_CHANGED`, `CARRIER_UNAVAILABLE`, `SESSION_EXPIRED`, `BUSY`, `NOT_FOUND`,
+`UNAUTHORIZED`, `RATE_LIMITED`, `VALIDATION_FAILED`, `INTERNAL`.
+These follow the design's login outcomes (`ok | mfa_required | bad_credentials | blocked | changed`)
+and BlockDetector labels (blocked, challenge, CAPTCHA, bad credentials, page changed, timeout).
 
 ## Working rules
 
