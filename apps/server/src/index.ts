@@ -29,6 +29,7 @@ const app = createApp({
   api: {
     sessions: services.sessions,
     status: () => services.status(),
+    eventsTransport: config.eventsTransport,
     accessCode: config.accessCode,
     logger,
     secureCookies: config.env === 'production',

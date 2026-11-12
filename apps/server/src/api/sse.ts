@@ -53,6 +53,23 @@ export function formatSseEvent(event: SessionEvent): string {
   return `event: ${wire.type}\ndata: ${JSON.stringify(wire)}\n\n`;
 }
 
+/**
+ * The events a new stream would start with, without keeping a subscription: the polling
+ * fallback's snapshot. May throw NOT_FOUND, like subscribe.
+ */
+export function sessionSnapshot(
+  sessions: SessionService,
+  ownerId: string,
+  sessionId: string,
+): SessionEvent[] {
+  const events: SessionEvent[] = [];
+  const unsubscribe = sessions.subscribe(ownerId, sessionId, (event) =>
+    events.push(toWireEvent(event)),
+  );
+  unsubscribe();
+  return events;
+}
+
 export const HEARTBEAT = ': ping\n\n';
 
 /**

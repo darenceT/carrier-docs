@@ -6,6 +6,7 @@ import type {
   MfaRequest,
   PrewarmRequest,
   SessionCreated,
+  SessionSnapshot,
   StartSessionRequest,
 } from '@carrier-docs/contracts';
 
@@ -87,6 +88,8 @@ export interface Api {
   submitMfa(sessionId: string, body: MfaRequest): Promise<void>;
   forgetMe(): Promise<ForgetResponse>;
   eventsUrl(sessionId: string): string;
+  /** The polling fallback: the events a new SSE stream would start with. */
+  sessionSnapshot(sessionId: string): Promise<SessionSnapshot>;
   documentUrl(sessionId: string, docId: string): string;
 }
 
@@ -118,6 +121,7 @@ export function createApi(fetchFn: FetchFn = (input, init) => fetch(input, init)
     submitMfa: (id, body) => request<void>('POST', `${sessionPath(id)}/mfa`, body),
     forgetMe: () => request<ForgetResponse>('DELETE', '/api/me'),
     eventsUrl: (id) => `${sessionPath(id)}/events`,
+    sessionSnapshot: (id) => request<SessionSnapshot>('GET', `${sessionPath(id)}/snapshot`),
     documentUrl: (id, docId) => `${sessionPath(id)}/documents/${encodeURIComponent(docId)}`,
   };
 }

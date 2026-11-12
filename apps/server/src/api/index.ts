@@ -38,7 +38,7 @@ export function createApi(deps: ApiDeps): Middleware {
   const gate = createAccessGate(accessCode, deps.secureCookies);
 
   const authenticatedRoutes = [
-    carrierRoutes({ sessions }),
+    carrierRoutes({ sessions, eventsTransport: deps.eventsTransport }),
     sessionRoutes({ sessions, limits, heartbeatMs }),
     documentRoutes({ sessions }),
     meRoutes({ sessions }),

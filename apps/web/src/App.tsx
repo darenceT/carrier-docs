@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useReducer, useState } from 'react';
+import type { EventsTransport } from '@carrier-docs/contracts';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { friendlyError, toApiError, type Api, type ApiError } from './api.ts';
 import {
   AccessForm,
@@ -8,7 +9,7 @@ import {
   MfaForm,
   StatusPanel,
 } from './components.tsx';
-import { openSessionEvents, type EventSourceFactory } from './events.ts';
+import { followSession, type EventSourceFactory } from './events.ts';
 import { initialState, loginRequest, reducer, screenOf, selectedCarrier } from './state.ts';
 
 export interface Deps {
@@ -32,10 +33,19 @@ function ServerHealth() {
   );
 }
 
+/** `?transport=poll` (or `sse`) overrides what the server advertises, for testing through a proxy. */
+function transportFromUrl(): EventsTransport | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const value = new URLSearchParams(window.location.search).get('transport');
+  return value === 'poll' || value === 'sse' ? value : undefined;
+}
+
 export default function App({ deps }: { deps: Deps }) {
   const { api, eventSource } = deps;
   const [state, dispatch] = useReducer(reducer, initialState);
   const screen = screenOf(state);
+  // A ref, not state: a change must not reopen a running session's stream.
+  const transport = useRef<EventsTransport>(transportFromUrl() ?? 'sse');
 
   /** Every API failure goes through here: 401 means "show the access form". */
   const onApiError = useCallback((err: unknown, handle: (e: ApiError) => void) => {
@@ -47,7 +57,10 @@ export default function App({ deps }: { deps: Deps }) {
   const loadCarriers = useCallback(() => {
     api
       .carriers()
-      .then((r) => dispatch({ type: 'carriers_loaded', carriers: r.carriers }))
+      .then((r) => {
+        if (r.eventsTransport && !transportFromUrl()) transport.current = r.eventsTransport;
+        dispatch({ type: 'carriers_loaded', carriers: r.carriers });
+      })
       .catch((err: unknown) =>
         onApiError(err, (e) =>
           dispatch({ type: 'carriers_failed', message: friendlyError(e.code) }),
@@ -61,13 +74,18 @@ export default function App({ deps }: { deps: Deps }) {
     if (needCarriers) loadCarriers();
   }, [needCarriers, loadCarriers]);
 
-  // One event stream per session; closed on start over, try again, forget me and unmount.
+  // One event stream (or poller) per session; closed on start over, try again, forget me and
+  // unmount. A lost SSE stream falls back to polling before the session counts as lost.
   const { sessionId } = state;
   useEffect(() => {
     if (!sessionId) return;
-    return openSessionEvents(
-      eventSource,
-      api.eventsUrl(sessionId),
+    return followSession(
+      {
+        transport: transport.current,
+        eventSource,
+        eventsUrl: api.eventsUrl(sessionId),
+        fetchSnapshot: () => api.sessionSnapshot(sessionId),
+      },
       (event) => dispatch(event),
       () => dispatch({ type: 'stream_lost' }),
     );

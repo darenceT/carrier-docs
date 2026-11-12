@@ -1,5 +1,5 @@
 import Router from '@koa/router';
-import type { SessionCreated, StartSessionRequest } from '@carrier-docs/contracts';
+import type { SessionCreated, SessionSnapshot, StartSessionRequest } from '@carrier-docs/contracts';
 import { AppError } from '../../core/errors.js';
 import type { SessionService } from '../../core/ports.js';
 import { rateLimit } from '../middleware/rate-limit.js';
@@ -10,7 +10,7 @@ import {
   startSessionCarrierSchema,
   startSessionSchema,
 } from '../schemas.js';
-import { streamSessionEvents } from '../sse.js';
+import { sessionSnapshot, streamSessionEvents } from '../sse.js';
 import type { ApiContext, ApiRouter, RateLimitOptions } from '../types.js';
 
 interface Deps {
@@ -33,6 +33,7 @@ export function sessionRoutes({ sessions, limits, heartbeatMs }: Deps): ApiRoute
   router.post('/prewarm', rateLimit('prewarm', limits.prewarmMax, limits.windowMs), prewarm);
   router.post('/', rateLimit('login', limits.loginMax, limits.windowMs), startSession);
   router.get('/:sessionId/events', streamEvents);
+  router.get('/:sessionId/snapshot', snapshot);
   router.post('/:sessionId/mfa', submitMfa);
 
   return router;
@@ -59,6 +60,14 @@ export function sessionRoutes({ sessions, limits, heartbeatMs }: Deps): ApiRoute
   function streamEvents(ctx: ApiContext): void {
     const { sessionId } = sessionParams.parse(ctx.params);
     streamSessionEvents(ctx, { sessions, ownerId: ctx.state.ownerId, sessionId, heartbeatMs });
+  }
+
+  function snapshot(ctx: ApiContext): void {
+    const { sessionId } = sessionParams.parse(ctx.params);
+    ctx.set('Cache-Control', 'no-store');
+    ctx.body = {
+      events: sessionSnapshot(sessions, ctx.state.ownerId, sessionId),
+    } satisfies SessionSnapshot;
   }
 
   async function submitMfa(ctx: ApiContext): Promise<void> {
