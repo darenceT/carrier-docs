@@ -526,6 +526,16 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       try {
         const body = JSON.parse(req.postData() ?? '') as unknown;
         if (body && typeof body === 'object' && (body as { type?: unknown }).type === 'idCard') {
+          if (!w.template) {
+            // Which headers the app sends, by name only: our own copy of this request was
+            // refused (401), and it only carries the "kept" ones. Never the values.
+            const names = Object.keys(all).sort();
+            this.log('progressive card request headers', {
+              kept: names.filter((k) => KEEP_HEADER.test(k)).join(' '),
+              dropped: names.filter((k) => !KEEP_HEADER.test(k)).join(' '),
+              bodyKeys: Object.keys(body).sort().join(' '),
+            });
+          }
           w.template ??= { url: req.url(), headers, body: body as Record<string, unknown> };
           const asked = policyFromDocumentUrl(req.url());
           if (asked && !w.appAsked.some((p) => p.number === asked.number)) w.appAsked.push(asked);
