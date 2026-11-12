@@ -193,4 +193,6 @@ npm run test:e2e          # Playwright: the Demo carrier end to end through the 
 
 ## AI usage
 
-Built with Claude Code. Session links: _to add_ (docs/ai-sessions/).
+Built with Claude Code. Session links:
+- https://claude.ai/code/cshk_01HV3KES5vmmw9npnJZV3RoxKKAiHRhM2znikyhZwCT3ZT
+- https://claude.ai/code/cshk_01HV3KERTrchFSBrvqfu4Mz5UcbB6aPTUe3JTbX83TDHmc
