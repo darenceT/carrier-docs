@@ -23,6 +23,8 @@ const webDistDir = path.resolve(import.meta.dirname, '../../web/dist');
 
 const services = createServices(config, logger);
 const app = createApp({
+  // Render sets the deployed commit; otherwise this process's start time (a restart is a new build).
+  version: process.env.RENDER_GIT_COMMIT?.slice(0, 12) ?? `start-${Date.now()}`,
   webDistDir,
   mockPortal: config.demoCarrierEnabled,
   canary: { token: config.canaryToken, run: () => services.runCanary() },

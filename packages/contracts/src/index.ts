@@ -14,7 +14,7 @@
  *   POST   /api/sessions/:sessionId/mfa               MfaRequest -> 202
  *   GET    /api/sessions/:sessionId/documents/:docId  -> the document bytes (application/pdf)
  *   DELETE /api/me                                    -> ForgetResponse ("Forget me")
- *   GET    /healthz                                   -> { ok: true }
+ *   GET    /healthz                                   -> HealthResponse
  *
  * Errors: any non-2xx JSON response has the body ErrorBody.
  */
@@ -180,6 +180,14 @@ export type SessionEvent =
   | { type: 'done' };
 
 export type SessionEventType = SessionEvent['type'];
+
+// ---------- GET /healthz ----------
+
+export interface HealthResponse {
+  ok: true;
+  /** The running build. When it changes under an open tab, the tab offers a reload. */
+  version: string;
+}
 
 // ---------- GET /api/status (behind the access code) ----------
 

@@ -11,7 +11,12 @@ describe('health checks', () => {
   it('GET /healthz returns ok', async () => {
     const res = await request(createApp().callback()).get('/healthz');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toEqual({ ok: true, version: 'dev' });
+  });
+
+  it('GET /healthz names the running build, so an open tab can tell it was redeployed', async () => {
+    const res = await request(createApp({ version: 'abc123' }).callback()).get('/healthz');
+    expect(res.body).toEqual({ ok: true, version: 'abc123' });
   });
 
   it('the temporary disk check is gone', async () => {
@@ -45,7 +50,7 @@ describe('with the API mounted', () => {
   it('keeps health checks working and adds security headers', async () => {
     const res = await request(createApp({ api }).callback()).get('/healthz');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toMatchObject({ ok: true });
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['content-security-policy']).toContain("default-src 'self'");
   });

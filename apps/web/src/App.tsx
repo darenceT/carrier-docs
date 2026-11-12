@@ -1,4 +1,4 @@
-import type { EventsTransport } from '@carrier-docs/contracts';
+import type { EventsTransport, HealthResponse } from '@carrier-docs/contracts';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { friendlyError, toApiError, type Api, type ApiError } from './api.ts';
 import {
@@ -17,17 +17,50 @@ export interface Deps {
   eventSource: EventSourceFactory;
 }
 
-/** Small footer showing whether the server answers /healthz (also used by the e2e smoke test). */
+/** How often an open tab asks whether the server was redeployed (also on returning to the tab). */
+const HEALTH_CHECK_MS = 30_000;
+
+/**
+ * Footer showing whether the server answers /healthz (also used by the e2e smoke test). It also
+ * notices a redeploy under an open tab: the tab keeps running the old code, so new fixes would
+ * not show until a reload. Then it offers one (never forces it: a login may be in progress).
+ */
 function ServerHealth() {
   const [health, setHealth] = useState<'checking' | 'ok' | 'down'>('checking');
+  const [stale, setStale] = useState(false);
+  const firstVersion = useRef<string | undefined>(undefined);
   useEffect(() => {
-    fetch('/healthz')
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .then((body: { ok?: boolean }) => setHealth(body.ok ? 'ok' : 'down'))
-      .catch(() => setHealth('down'));
+    const check = () =>
+      fetch('/healthz', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+        .then((body: Partial<HealthResponse>) => {
+          setHealth(body.ok ? 'ok' : 'down');
+          if (typeof body.version !== 'string') return;
+          firstVersion.current ??= body.version;
+          if (body.version !== firstVersion.current) setStale(true);
+        })
+        .catch(() => setHealth('down'));
+    void check();
+    const timer = setInterval(() => void check(), HEALTH_CHECK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
   return (
     <footer className="note">
+      {stale ? (
+        <p role="status" className="new-version" data-testid="new-version">
+          A new version is available.{' '}
+          <button type="button" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </p>
+      ) : null}
       <span data-testid="health">Server: {health}</span>
     </footer>
   );

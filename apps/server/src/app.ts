@@ -8,6 +8,11 @@ import { createApi, type ApiDeps } from './api/index.js';
 import { canaryRoute, type CanaryRouteOptions } from './canary/route.js';
 
 export interface AppOptions {
+  /**
+   * Which build is running, sent in /healthz so an open tab can tell it was redeployed under it
+   * and offer a reload (an old tab keeps running old code). Default "dev".
+   */
+  version?: string;
   /** Built React app to serve at /, if present. */
   webDistDir?: string;
   /** Serve the mock carrier portal at /demo-portal (the Demo carrier's "carrier site"). */
@@ -52,7 +57,7 @@ export function createApp(options: AppOptions = {}): Koa {
   if (options.canary) app.use(canaryRoute(options.canary));
 
   router.get('/healthz', (ctx) => {
-    ctx.body = { ok: true };
+    ctx.body = { ok: true, version: options.version ?? 'dev' };
   });
 
   app.use(router.routes()).use(router.allowedMethods());
