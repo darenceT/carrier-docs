@@ -1,6 +1,11 @@
+import zlib from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { firstCardFile, idCardFromDocuments } from '../../src/carriers/progressive/document.js';
+import {
+  firstCardFile,
+  idCardFromDocuments,
+  imagesToPdf,
+} from '../../src/carriers/progressive/document.js';
 import { findPolicies, policyFromDocumentUrl } from '../../src/carriers/progressive/policies.js';
 import { describeShape } from '../../src/carriers/shared.js';
 
@@ -113,4 +118,63 @@ describe('firstCardFile', () => {
       );
     }
   });
+});
+
+describe('idCardFromDocuments off the main thread', () => {
+  /** A large, noisy RGB PNG (noise compresses badly, so decoding it costs real CPU). */
+  function bigPng(width: number, height: number): string {
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      const td = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(zlib.crc32(td));
+      return Buffer.concat([len, td, crc]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 2; // RGB
+    const raw = Buffer.alloc((width * 3 + 1) * height);
+    for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+    for (let y = 0; y < height; y++) raw[y * (width * 3 + 1)] = 0; // filter: none
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', ihdr),
+      chunk('IDAT', zlib.deflateSync(raw)),
+      chunk('IEND', Buffer.alloc(0)),
+    ]).toString('base64');
+  }
+
+  it('keeps the event loop free while it converts (the first image is served meanwhile)', async () => {
+    const card = bigPng(1600, 1000);
+    let last = Date.now();
+    let worstGap = 0;
+    const tick = setInterval(() => {
+      const now = Date.now();
+      worstGap = Math.max(worstGap, now - last);
+      last = now;
+    }, 5);
+    const pdf = await idCardFromDocuments([card, card, card, card]);
+    clearInterval(tick);
+    worstGap = Math.max(worstGap, Date.now() - last); // a loop that never ticked counts too
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(4);
+    expect(worstGap).toBeLessThan(150);
+  }, 30_000);
+
+  it('the same conversion on this thread does block it (what the worker avoids)', async () => {
+    const card = Buffer.from(bigPng(1600, 1000), 'base64');
+    let last = Date.now();
+    let worstGap = 0;
+    const tick = setInterval(() => {
+      const now = Date.now();
+      worstGap = Math.max(worstGap, now - last);
+      last = now;
+    }, 5);
+    await imagesToPdf([card, card, card, card].map((b) => new Uint8Array(b)));
+    clearInterval(tick);
+    worstGap = Math.max(worstGap, Date.now() - last); // a loop that never ticked counts too
+    expect(worstGap).toBeGreaterThan(150);
+  }, 30_000);
 });
