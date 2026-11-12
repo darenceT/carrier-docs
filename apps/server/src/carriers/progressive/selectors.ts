@@ -52,6 +52,8 @@ export const selectors = {
   remember: /remember (this )?device|trust this (device|browser)/i,
   /** The link in the account that opens the ID cards (the app then requests one itself). */
   idCards: /id cards?/i,
+  /** The app's own "your session timed out" page (seen at /app/session-timeout). */
+  sessionTimeoutPath: /\/session-timeout\b/i,
 } as const;
 
 /** What Progressive's pages say, for the BlockDetector. */
