@@ -89,7 +89,12 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
     if (!signin) return this.failure(page);
 
     const status = signin.status();
-    if (status >= 200 && status < 300) return { kind: 'ok' };
+    if (status >= 200 && status < 300) {
+      // Sign-in answers with a redirect target, and the page following it is what establishes
+      // the login on the web app (a handoff). Navigating ourselves here would cancel it and the
+      // app would bounce to the login page. So wait for the page's own redirect to arrive.
+      return (await this.arrivedOnApp(page)) ? { kind: 'ok' } : this.failure(page);
+    }
     if (status === 403 || status === 429) return this.failure(page, status);
     if (status >= 500) return { kind: 'failed', code: 'CARRIER_UNAVAILABLE' };
     // Wrong or expired code: ask again; the session layer counts attempts.
@@ -205,13 +210,26 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
 
   // ---------- helpers ----------
 
+  /** Waits for the page's own post-sign-in redirect to land on the web app. */
+  private async arrivedOnApp(page: Page): Promise<boolean> {
+    const deadline = Date.now() + this.timeout;
+    while (Date.now() < deadline) {
+      if (this.onApp(page)) return true;
+      await page.waitForTimeout(100);
+    }
+    return this.onApp(page);
+  }
+
   private onLoginPage(page: Page): boolean {
     return this.sameOriginPath(page.url(), this.urls.login);
   }
 
+  /** On the web app: its origin and under its path (on the real site, all of me.lemonade.com). */
   private onApp(page: Page): boolean {
     try {
-      return new URL(page.url()).origin === new URL(this.urls.appHome).origin;
+      const here = new URL(page.url());
+      const app = new URL(this.urls.appHome);
+      return here.origin === app.origin && here.pathname.startsWith(app.pathname);
     } catch {
       return false;
     }
