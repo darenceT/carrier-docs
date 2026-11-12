@@ -131,10 +131,11 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 Run with `live-login` (`apps/server/src/scripts/live-login.ts`) in the Render Shell, patched
 headless, Render's own IP. Times exclude the person typing credentials and codes.
 
-| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                |
-| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29) |
-| —          | Lemonade    |            |                      |          |               | Not run yet                                                                                                                           |
+| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                                                               |
+| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29)                                                |
+| 2026-11-12 | Progressive | 4498 ms    | 875 ms               | 916 ms   | 1774 ms       | **OK.** Account page reached (+15095 ms, mostly script waits, see below). Repeat run with saved cookies: no login needed, account page in 6594 ms                                    |
+| 2026-11-12 | Lemonade    | 2394 ms    | 660 ms (SMS sent)    | —        | 929 ms        | **OK.** Policies API answered after +5782 ms (dashboard load); first policy PDF (1063 KB, valid) in +547 ms; total 10312 ms. Repeat run with saved cookies: no login needed, 3707 ms |
 
 Earlier attempts stopped before anything was typed (field lookup, then an invisible prompt; fixed
 in #21, #26, #27), so none counted as a login attempt.
@@ -147,8 +148,29 @@ Findings (Progressive):
 - **Latency:** about 7.8 s of machine time from opening the login page to the code being accepted,
   of which 4.8 s is the login page itself (redirects through PingFederate). Pre-warming the page
   while the user types hides most of that.
-- **Still to confirm:** remember-device, the account API answering, and the repeat-run check (next
-  run, after #29).
+- **Full login works (2026-11-12, after #29 and #31):** password, SMS code and the remember step,
+  through to `policyservicing.apps.progressive.com/app/account-home`.
+- **Session reuse works:** a fresh browser with only the saved cookies reached the account with no
+  password and no SMS (6.6 s, going through the login URL and PingFederate's redirects). The
+  adapter can skip that chain by opening the account app and calling the documents API directly.
+- **"Logged in" step (15.1 s) is mostly the script:** it waits up to 10 s for the remember control
+  and tries a plain tick (3 s timeout) before the label click that works. The adapter clicks the
+  label directly; Progressive's own share is estimated at 1-2 s but wasn't measured separately.
+- **Remember-device unconfirmed:** no `pgrDevice_*` cookie was set this run, although one exists in
+  the user's own browser. Either it's set differently, or the label click didn't choose "remember".
+  The next fresh login settles it: skipping the SMS step means the device was remembered.
+
+Findings (Lemonade, 2026-11-12):
+
+- **Cloudflare did not challenge.** Email, SMS code and sign-in all passed from Render's IP with
+  patched headless, then both policies were listed and the first policy PDF downloaded (1063 KB,
+  valid; not saved).
+- **Session reuse works:** a fresh browser with only the saved cookies reached the account with no
+  login in 3.7 s. Important for Lemonade, which has no remember-device step.
+- **Latency:** 10.3 s machine time to the first document. The largest step (5.8 s) is waiting for
+  the dashboard to load and make its own policies call; the adapter calls the policies API itself
+  right after sign-in instead. With pre-warming hiding the 2.4 s login page, the estimated adapter
+  time is about 3 s machine time (about 5 s with the person typing the code). Not yet measured.
 
 ### Portal mapping
 
@@ -264,9 +286,9 @@ which is good for the 8 s budget.
 
 ## Decisions
 
-| Decision                                | Result                                                                                                                                 | Evidence                                                                                                                                                                                                                                                         |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1 Automation (in-page document fetch?) | Yes for both. Progressive: in-page API calls, PDF returned as base64 in JSON. Lemonade: one in-page API call, then the bearer PDF link | Progressive: `POST api.progressive.com/policypro/v1/policies/<id>/document` returns the ID card PDF in `documents[]`. Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy, which downloads with no cookies |
-| D2 Browser (`PROGRESSIVE_BROWSER`)      | Progressive: patched headless                                                                                                          | Real login from Render: password and SMS code accepted, no challenge (2026-11-11). Lemonade pending                                                                                                                                                              |
-| D3 Egress (direct or proxy)             | Progressive: direct (Render's IP)                                                                                                      | Same run: datacenter IP accepted through MFA. Lemonade (Cloudflare) pending                                                                                                                                                                                      |
-| `MAX_SESSIONS`                          | 1 on Starter (512 MB); no plan upgrade (decided)                                                                                       | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                                                                                                                                   |
+| Decision                                               | Result                                                                                                                                 | Evidence                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1 Automation (in-page document fetch?)                | Yes for both. Progressive: in-page API calls, PDF returned as base64 in JSON. Lemonade: one in-page API call, then the bearer PDF link | Progressive: `POST api.progressive.com/policypro/v1/policies/<id>/document` returns the ID card PDF in `documents[]`. Lemonade: `GET my.lemonade.com/api/v1/web_dashboard/accounts/home/policies` returns `form_url` per policy, which downloads with no cookies |
+| D2 Browser (`PROGRESSIVE_BROWSER`, `CARRIER2_BROWSER`) | Patched headless for both                                                                                                              | Real logins from Render passed for both: Progressive through PingFederate's SMS step, Lemonade through Cloudflare (2026-11-12)                                                                                                                                   |
+| D3 Egress (direct or proxy)                            | Direct (Render's own IP) for both; no proxy                                                                                            | Same runs: the datacenter IP was accepted through login and MFA by both carriers                                                                                                                                                                                 |
+| `MAX_SESSIONS`                                         | 1 on Starter (512 MB); no plan upgrade (decided)                                                                                       | 1 session = 320 MB, 2 = 481 MB (94%) in the Render container; an over-limit run was OOM-killed                                                                                                                                                                   |
