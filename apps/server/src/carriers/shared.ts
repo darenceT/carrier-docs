@@ -59,6 +59,45 @@ export function idString(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Why a call into the page failed, in a few words for the log (never the error's own message,
+ * which can quote URLs). "navigated": the page moved while the call ran. "fetch rejected": the
+ * browser's fetch threw (network, or CORS refused it).
+ */
+export function inPageFailure(err: unknown): string {
+  if (isBrowserGone(err)) return 'browser gone';
+  const m = err instanceof Error ? err.message : '';
+  if (
+    /execution context was destroyed|navigat|frame was detached|context.*(closed|destroyed)/i.test(
+      m,
+    )
+  ) {
+    return 'navigated';
+  }
+  if (/failed to fetch|networkerror|load failed|typeerror/i.test(m)) return 'fetch rejected';
+  return 'other';
+}
+
+/**
+ * page.evaluate, retried once if the page navigated mid-call (after it settles). Any other
+ * failure is rethrown as is; callers name it with inPageFailure.
+ */
+export async function evaluateInPage<A, R>(
+  page: Page,
+  fn: (arg: A) => Promise<R>,
+  arg: A,
+): Promise<R> {
+  // Arguments here are plain JSON (strings, records), so playwright's Unboxed<A> is A itself.
+  const evaluate = page.evaluate.bind(page) as (f: (a: A) => Promise<R>, a: A) => Promise<R>;
+  try {
+    return await evaluate(fn, arg);
+  } catch (err) {
+    if (inPageFailure(err) !== 'navigated') throw err;
+    await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
+    return await evaluate(fn, arg);
+  }
+}
+
 export interface InPageResponse<T> {
   status: number;
   body: T;
@@ -70,22 +109,26 @@ export interface InPageResponse<T> {
  */
 export async function fetchJsonInPage<T>(page: Page, url: string): Promise<InPageResponse<T>> {
   try {
-    return await page.evaluate(async (u) => {
-      const res = await fetch(u, {
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      });
-      const text = await res.text();
-      let body: unknown = null;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        // Not JSON (an error page, a login redirect): the caller decides from the status.
-      }
-      return { status: res.status, body: body as T };
-    }, url);
-  } catch {
-    throw new AppError('CARRIER_UNAVAILABLE', 'in-page fetch failed');
+    return await evaluateInPage(
+      page,
+      async (u: string) => {
+        const res = await fetch(u, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        const text = await res.text();
+        let body: unknown = null;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // Not JSON (an error page, a login redirect): the caller decides from the status.
+        }
+        return { status: res.status, body: body as T };
+      },
+      url,
+    );
+  } catch (err) {
+    throw new AppError('CARRIER_UNAVAILABLE', `in-page fetch failed: ${inPageFailure(err)}`);
   }
 }
 
@@ -103,22 +146,26 @@ export interface InPageFile {
 export async function fetchFileInPage(page: Page, url: string): Promise<InPageFile> {
   let result: { status: number; contentType: string; contentDisposition: string; b64: string };
   try {
-    result = await page.evaluate(async (u) => {
-      const res = await fetch(u, { credentials: 'include' });
-      const buf = new Uint8Array(await res.arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < buf.length; i += 0x8000) {
-        binary += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      }
-      return {
-        status: res.status,
-        contentType: res.headers.get('content-type') ?? '',
-        contentDisposition: res.headers.get('content-disposition') ?? '',
-        b64: btoa(binary),
-      };
-    }, url);
-  } catch {
-    throw new AppError('CARRIER_UNAVAILABLE', 'in-page download failed');
+    result = await evaluateInPage(
+      page,
+      async (u: string) => {
+        const res = await fetch(u, { credentials: 'include' });
+        const buf = new Uint8Array(await res.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < buf.length; i += 0x8000) {
+          binary += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        }
+        return {
+          status: res.status,
+          contentType: res.headers.get('content-type') ?? '',
+          contentDisposition: res.headers.get('content-disposition') ?? '',
+          b64: btoa(binary),
+        };
+      },
+      url,
+    );
+  } catch (err) {
+    throw new AppError('CARRIER_UNAVAILABLE', `in-page download failed: ${inPageFailure(err)}`);
   }
   return {
     status: result.status,

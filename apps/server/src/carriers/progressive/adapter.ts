@@ -13,7 +13,15 @@ import type {
   DocumentContent,
   LoginOutcome,
 } from '../../core/ports.js';
-import { describeShape, maskPolicyNumber, sortDocuments, step } from '../shared.js';
+import { isBrowserGone } from '../../browser/errors.js';
+import {
+  describeShape,
+  evaluateInPage,
+  inPageFailure,
+  maskPolicyNumber,
+  sortDocuments,
+  step,
+} from '../shared.js';
 import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
 import { PROGRESSIVE_URLS, blockRules, selectors, type ProgressiveUrls } from './selectors.js';
 
@@ -233,24 +241,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     url.searchParams.set('policyInfoKey', policy.key);
     const body = JSON.stringify({ ...template.body, mimeType: 'pdf' });
 
-    let res: { status: number; json: unknown };
-    try {
-      res = await page.evaluate(
-        async ({ u, h, b }) => {
-          const r = await fetch(u, { method: 'POST', headers: h, body: b, credentials: 'include' });
-          let json: unknown = null;
-          try {
-            json = await r.json();
-          } catch {
-            // not JSON: decided from the status
-          }
-          return { status: r.status, json };
-        },
-        { u: url.href, h: template.headers, b: body },
-      );
-    } catch {
-      throw new AppError('CARRIER_UNAVAILABLE', 'document request');
-    }
+    const res = await this.postDocument(page, url.href, template.headers, body);
     if (res.status === 401) throw new AppError('SESSION_EXPIRED');
     if (res.status < 200 || res.status >= 300) {
       throw new AppError('CARRIER_UNAVAILABLE', `document ${res.status}`);
@@ -284,6 +275,60 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     }
     if (seen === null) throw new AppError('CARRIER_UNAVAILABLE', 'account handshake');
     throw new AppError('CARRIER_PAGE_CHANGED', `handshake shape ${w.handshakeShape ?? '?'}`);
+  }
+
+  /**
+   * POST the ID-card request. First as the app sends it: from the page, Bearer token, no cookies
+   * (the API is on another origin and authenticates by token; a cookie-carrying request can be
+   * refused by its CORS policy). If the browser refuses that, or the API wants cookies after all
+   * (401/403), retry with cookies. Last, from the browser context's request client, which CORS
+   * doesn't apply to. The error names why each attempt failed (no values).
+   */
+  private async postDocument(
+    page: Page,
+    url: string,
+    headers: Record<string, string>,
+    body: string,
+  ): Promise<{ status: number; json: unknown }> {
+    const failures: string[] = [];
+    for (const credentials of ['same-origin', 'include'] as const) {
+      try {
+        const res = await evaluateInPage(
+          page,
+          async ({ u, h, b, c }) => {
+            const r = await fetch(u, { method: 'POST', headers: h, body: b, credentials: c });
+            let json: unknown = null;
+            try {
+              json = await r.json();
+            } catch {
+              // not JSON: decided from the status
+            }
+            return { status: r.status, json };
+          },
+          { u: url, h: headers, b: body, c: credentials as RequestCredentials },
+        );
+        if ((res.status === 401 || res.status === 403) && credentials === 'same-origin') {
+          failures.push(`page ${res.status}`);
+          continue;
+        }
+        return res;
+      } catch (err) {
+        if (isBrowserGone(err)) throw new AppError('CARRIER_UNAVAILABLE', 'browser went away');
+        failures.push(`page (${credentials}) ${inPageFailure(err)}`);
+      }
+    }
+    try {
+      const r = await page.context().request.post(url, {
+        headers,
+        data: body,
+        timeout: this.timeout,
+      });
+      const json: unknown = await r.json().catch(() => null);
+      return { status: r.status(), json };
+    } catch (err) {
+      failures.push(`context ${isBrowserGone(err) ? 'browser gone' : 'request failed'}`);
+      throw new AppError('CARRIER_UNAVAILABLE', `document request: ${failures.join('; ')}`);
+    }
   }
 
   // ---------- watching the page ----------
