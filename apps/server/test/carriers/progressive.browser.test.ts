@@ -96,7 +96,7 @@ const idCardsPage = (
 ) => `<!doctype html><html><body><h1>ID cards</h1><script>
 for (const [n, key] of ${JSON.stringify(policies)}) {
   fetch('__API__/v1/policies/' + n + '/document?policyInfoKey=' + key, { method: 'POST',
-    headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'x-prg-signature': 'sig:png', 'content-type': 'application/json' },
+    headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'x-prg-signature': 'sig:png', api_key: 'app-key', 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
 }
 </script></body></html>`;
@@ -108,10 +108,12 @@ let appFetches: [string, string][] = [
 
 const SPIKE_HANDSHAKE = {
   policySessions: [
-    { policyNumber: '1111', policySessionId: 'a', policyInfoKey: 'WA-AA' },
-    { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA' },
+    { policyNumber: '1111', policySessionId: 'a', policyInfoKey: 'WA-AA', term: 'T1' },
+    { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA', term: 'T1' },
   ],
 };
+/** What the adapters under test logged (sub-step lines: names, timings, statuses). */
+const logs: Record<string, unknown>[] = [];
 /**
  * Like (we believe) the real API: each document request is signed over its body, so a copy of
  * the app's request with another mimeType is refused (401). Off: the copy is accepted.
@@ -140,7 +142,7 @@ let apiBase = '';
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers':
-    'authorization, content-type, x-prgaccountsessionid, x-prg-signature',
+    'authorization, content-type, x-prgaccountsessionid, x-prg-signature, api_key',
   'access-control-allow-methods': 'GET, POST',
 };
 
@@ -245,6 +247,8 @@ function createPortal(): http.Server {
             return json(400, { error: 'bad request' });
           }
           if (!url.searchParams.get('policyInfoKey')) return json(400, { error: 'no key' });
+          // The API gateway's key: the real app sends it, and a request without it is refused.
+          if (req.headers.api_key !== 'app-key') return json(401, { error: 'no api key' });
           if (signed && req.headers['x-prg-signature'] !== `sig:${String(b.mimeType)}`) {
             return json(401, { error: 'bad signature' });
           }
@@ -289,6 +293,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
             pfFlows: '/pf-ws/authn/flows',
             api: `${apiBase}/`,
           },
+          log: (msg, fields) => void logs.push({ msg, ...fields }),
         });
       adapter = makeAdapter();
       sharedAdapter = adapter;
@@ -302,6 +307,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     });
 
     beforeEach(async () => {
+      logs.length = 0;
       context = (await browser.newContext()) as unknown as BrowserContext;
       context.setDefaultTimeout(30_000); // as in production (browser pool)
       page = await context.newPage();
@@ -469,6 +475,53 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const started = Date.now();
       await expect(adapter.listDocuments(page)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
       expect(Date.now() - started).toBeLessThan(3_000); // was 3 x the step timeout
+    });
+
+    it('checks once, off the headline path, whether our own card request is accepted', async () => {
+      signed = false; // an API that needs the key but no signature
+      await logIn();
+      await adapter.listDocuments(page);
+      await adapter.fetchDocument(page, 'idcard-1');
+      expect(logs.some((l) => l.msg === 'progressive own card request')).toBe(false);
+      await adapter.fetchDocument(page, 'idcard-1-image2');
+      await adapter.fetchDocument(page, 'idcard-2-image2');
+      const probes = logs.filter((l) => l.msg === 'progressive own card request');
+      expect(probes).toHaveLength(1);
+      expect(probes[0]).toMatchObject({
+        status: 200,
+        files: 1,
+        fileType: 'application/pdf',
+        type: 'idCard',
+        appMimeType: 'png',
+        format: 'electronic',
+        dpi: 96,
+        replacementVehicles: false,
+        policyTermShape: 'a9',
+        policyTermInHandshake: 'policySessions[].term',
+      });
+      // Names, statuses and shapes only: no policy number, key, token or file content.
+      const text = JSON.stringify(logs);
+      for (const secret of [
+        '1111',
+        '2222',
+        'WA-AA',
+        'fake-token',
+        'app-key',
+        PNG_B64.slice(0, 20),
+      ]) {
+        expect(text).not.toContain(secret);
+      }
+    });
+
+    it('reports a refused own request without failing the document', async () => {
+      await logIn(); // signed: a copy with another mimeType is refused
+      await adapter.listDocuments(page);
+      const file = await adapter.fetchDocument(page, 'idcard-1-image2');
+      expect(file.mimeType).toBe('image/png');
+      expect(logs.find((l) => l.msg === 'progressive own card request')).toMatchObject({
+        status: 401,
+        fileType: 'none',
+      });
     });
 
     it('asks again after a wrong code', async () => {

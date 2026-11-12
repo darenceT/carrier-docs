@@ -92,9 +92,50 @@ class Watch {
   appCards = new Map<string, { status: number; json?: unknown }>();
   /** Resolves when no handshake answer is being read. */
   reading: Promise<void> = Promise.resolve();
+  /** The handshake answer, kept in memory to see where the card request's fields come from. */
+  handshakeBody?: unknown;
+  /** The one-off check of our own card request was made (see probeOwnCardRequest). */
+  probed = false;
 }
 
-const KEEP_HEADER = /^(authorization|accept|content-type|x-[a-z0-9-]+)$/i;
+// What our own API requests copy from the app's: its token, its API key (the real app sends
+// `api_key`; without it our card request was refused with a 401) and its x-* headers. The
+// browser adds the rest (origin, referer, sec-*) itself.
+const KEEP_HEADER = /^(authorization|accept|content-type|api[-_]?key|x-[a-z0-9-]+)$/i;
+
+/** A value that is safe to log if it is a number, a boolean or a short word; else its shape. */
+function loggable(v: unknown): string | number | boolean {
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  if (typeof v === 'string' && /^[A-Za-z_-]{1,24}$/.test(v)) return v;
+  return shapeOf(v);
+}
+
+/** "2026-01-15" -> "9999-99-99", "ab12" -> "aa99": what a value looks like, never the value. */
+function shapeOf(v: unknown): string {
+  if (typeof v !== 'string') return v === null ? 'null' : typeof v;
+  return v
+    .slice(0, 24)
+    .replace(/[A-Za-z]/g, 'a')
+    .replace(/[0-9]/g, '9');
+}
+
+/** Where `value` appears in `body`, as key paths ("policySessions[].term"): names only. */
+function pathsOf(body: unknown, value: unknown): string[] {
+  const found = new Set<string>();
+  if (typeof value !== 'string' && typeof value !== 'number') return [];
+  const visit = (v: unknown, path: string, depth: number): void => {
+    if (depth > 8 || found.size >= 5) return;
+    if (v === value) found.add(path || '(root)');
+    else if (Array.isArray(v)) for (const x of v) visit(x, `${path}[]`, depth + 1);
+    else if (v !== null && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        visit(x, path ? `${path}.${/^[A-Za-z_]{1,40}$/.test(k) ? k : '#'}` : k, depth + 1);
+      }
+    }
+  };
+  visit(body, '', 0);
+  return [...found];
+}
 
 /**
  * Progressive: username + password, then an SMS code, then "remember this device". Documents come
@@ -361,6 +402,8 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const policy = this.policies.get(page)?.get(cardId);
     if (!policy) throw new AppError('NOT_FOUND');
     const file = cardFile(await this.cardResponse(page, policy), index);
+    // Off the headline path: only once the first document is out (a later image is being fetched).
+    if (index > 0) await this.probeOwnCardRequest(page);
     const suffix = index === 0 ? '' : `-${index + 1}`;
     return {
       mimeType: file.mimeType,
@@ -450,6 +493,59 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     }
     if (seen === null) throw new AppError('CARRIER_UNAVAILABLE', 'account handshake');
     throw new AppError('CARRIER_PAGE_CHANGED', `handshake shape ${w.handshakeShape ?? '?'}`);
+  }
+
+  /**
+   * A one-off check per page, to decide whether to stop clicking through the ID cards page: does
+   * Progressive accept our own copy of the app's card request (now carrying its api_key), asked
+   * as a PDF? Also logs how the app fills the request, so we could build it without the app's:
+   * plain enums as they are, anything else as a shape, and where policyTerm appears in the
+   * handshake. Statuses, counts and names only; never a document or an identifier.
+   */
+  private async probeOwnCardRequest(page: Page): Promise<void> {
+    const w = this.watch(page);
+    if (w.probed || !w.template) return;
+    w.probed = true;
+    const t = timer();
+    const b = w.template.body;
+    const fields = {
+      type: loggable(b.type),
+      appMimeType: loggable(b.mimeType),
+      format: loggable(b.format),
+      dpi: loggable(b.dpi),
+      replacementVehicles: loggable(b.replacementVehicles),
+      policyTermShape: shapeOf(b.policyTerm),
+      policyTermInHandshake: pathsOf(w.handshakeBody, b.policyTerm).join(' ') || 'not found',
+    };
+    try {
+      const res = await this.postDocument(
+        page,
+        w.template.url,
+        w.template.headers,
+        JSON.stringify({ ...b, mimeType: 'pdf' }),
+      );
+      const documents = (res.json as { documents?: unknown } | null)?.documents;
+      let fileType = 'none';
+      try {
+        fileType = cardFile(documents).mimeType;
+      } catch {
+        // no usable file: the status says why
+      }
+      this.log('progressive own card request', {
+        ...fields,
+        status: res.status,
+        files: cardFiles(documents).length,
+        fileType,
+        ms: t(),
+      });
+    } catch (err) {
+      this.log('progressive own card request', {
+        ...fields,
+        status: 0,
+        error: err instanceof AppError ? err.message.slice(0, 120) : 'failed',
+        ms: t(),
+      });
+    }
   }
 
   /**
@@ -577,6 +673,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       const done = read.then(() => undefined);
       w.reading = w.reading.then(() => done);
       const body: unknown = await read;
+      w.handshakeBody ??= body;
       const found = findPolicies(body);
       if (found.length > 0) w.handshakePolicies ??= found;
       else w.handshakeShape ??= describeShape(body);
