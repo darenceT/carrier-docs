@@ -3,6 +3,7 @@ import type { Page } from 'patchright';
 import type { Logger } from 'pino';
 import { createAntibot, createFingerprint, refreshFingerprint } from './antibot/index.js';
 import { DemoAdapter } from './carriers/demo/adapter.js';
+import { LemonadeAdapter } from './carriers/lemonade/adapter.js';
 import type { CarrierAdapter } from './core/ports.js';
 import { systemClock } from './infra/clock.js';
 import type { Config } from './infra/config.js';
@@ -34,7 +35,13 @@ export function createServices(config: Config, logger: Logger): Services {
   });
   const antibot = createAntibot(config, { logger, contextTimeoutMs: PAGE_ACTION_TIMEOUT_MS });
 
-  const adapters: CarrierAdapter<Page>[] = [];
+  // Real carriers first, so the dropdown lists them above the Demo carrier.
+  const adapters: CarrierAdapter<Page>[] = [
+    new LemonadeAdapter({
+      pacing: antibot.forCarrier('lemonade').pacing,
+      stepTimeoutMs: PAGE_ACTION_TIMEOUT_MS,
+    }),
+  ];
   if (config.demoCarrierEnabled) {
     // The mock portal is served by this same process (see app.ts).
     adapters.push(
