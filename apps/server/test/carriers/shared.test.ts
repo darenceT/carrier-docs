@@ -1,6 +1,12 @@
 import type { DocumentMeta } from '@carrier-docs/contracts';
 import { describe, expect, it } from 'vitest';
-import { filenameFrom, maskPolicyNumber, sortDocuments, step } from '../../src/carriers/shared.js';
+import {
+  filenameFrom,
+  inPageFailure,
+  maskPolicyNumber,
+  sortDocuments,
+  step,
+} from '../../src/carriers/shared.js';
 import { isBrowserGone } from '../../src/browser/errors.js';
 import { AppError } from '../../src/core/errors.js';
 
@@ -69,5 +75,23 @@ describe('carrier helpers', () => {
     expect(isBrowserGone(named)).toBe(true);
     expect(isBrowserGone(new Error('Timeout 30000ms exceeded'))).toBe(false);
     expect(isBrowserGone('Target closed')).toBe(false);
+  });
+});
+
+describe('inPageFailure', () => {
+  it('names why a call into the page failed, without quoting the error', () => {
+    expect(inPageFailure(new Error('page.evaluate: TypeError: Failed to fetch'))).toBe(
+      'fetch rejected',
+    );
+    expect(
+      inPageFailure(
+        new Error('Execution context was destroyed, most likely because of a navigation'),
+      ),
+    ).toBe('navigated');
+    expect(inPageFailure(new Error('Target page, context or browser has been closed'))).toBe(
+      'browser gone',
+    );
+    expect(inPageFailure(new Error('https://secret.example/x?token=abc went wrong'))).toBe('other');
+    expect(inPageFailure('not an error')).toBe('other');
   });
 });

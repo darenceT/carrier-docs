@@ -65,11 +65,11 @@ const APP_HOME = `<!doctype html><html><body><h1>Account</h1>
 <a href="/app/id-cards">ID Cards</a>
 <script>
 const token = '${TOKEN}'; // in memory only, like the real app
-fetch('/policypro/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } });
+fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } });
 </script></body></html>`;
 
 const ID_CARDS = `<!doctype html><html><body><h1>ID cards</h1><script>
-fetch('/policypro/v1/policies/1111/document?policyInfoKey=WA-AA', { method: 'POST',
+fetch('__API__/v1/policies/1111/document?policyInfoKey=WA-AA', { method: 'POST',
   headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'content-type': 'application/json' },
   body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
 </script></body></html>`;
@@ -82,6 +82,17 @@ const SPIKE_HANDSHAKE = {
 };
 /** What the imitation's handshake returns; tests swap it to imitate a changed response. */
 let handshakeBody: unknown = SPIKE_HANDSHAKE;
+
+/**
+ * Like the real one, the API is on another origin than the app and authenticates by Bearer
+ * token, with a wildcard CORS policy: the browser refuses a request that carries cookies to it.
+ */
+let apiBase = '';
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, content-type, x-prgaccountsessionid',
+  'access-control-allow-methods': 'GET, POST',
+};
 
 function loggedIn(req: http.IncomingMessage): boolean {
   return /(^|;\s*)pf=ok/.test(req.headers.cookie ?? '');
@@ -99,13 +110,18 @@ function createPortal(): http.Server {
   return http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://x');
+      const api = url.pathname.startsWith('/policypro/');
       const json = (status: number, data: unknown, headers: Record<string, string> = {}) => {
-        res.writeHead(status, { 'content-type': 'application/json', ...headers });
+        res.writeHead(status, {
+          'content-type': 'application/json',
+          ...(api ? CORS : {}),
+          ...headers,
+        });
         res.end(JSON.stringify(data));
       };
       const html = (page: string) => {
         res.writeHead(200, { 'content-type': 'text/html' });
-        res.end(page);
+        res.end(page.replaceAll('__API__', apiBase));
       };
       if (url.pathname === '/access/login') {
         if (loggedIn(req)) {
@@ -146,7 +162,7 @@ function createPortal(): http.Server {
       }
       if (url.pathname.startsWith('/policypro/')) {
         if (req.method === 'OPTIONS') {
-          res.writeHead(204);
+          res.writeHead(204, CORS);
           return res.end();
         }
         if (req.headers.authorization !== TOKEN) return json(401, { error: 'unauthorized' });
@@ -186,7 +202,9 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     beforeAll(async () => {
       server = createPortal();
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const port = (server.address() as AddressInfo).port;
+      const base = `http://127.0.0.1:${port}`;
+      apiBase = `http://localhost:${port}/policypro`;
       adapter = new ProgressiveAdapter({
         pacing: noPacing,
         stepTimeoutMs: 5_000,
@@ -195,7 +213,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
           appOrigin: base,
           appPathPrefix: '/app/',
           pfFlows: '/pf-ws/authn/flows',
-          api: `${base}/policypro/`,
+          api: `${apiBase}/`,
         },
       });
       const executablePath = process.env.BROWSER_EXECUTABLE_PATH;
