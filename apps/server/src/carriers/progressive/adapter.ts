@@ -23,7 +23,7 @@ import {
   sortDocuments,
   step,
 } from '../shared.js';
-import { firstCardFile, idCardFromDocuments } from './document.js';
+import { cardFile, cardFiles } from './document.js';
 import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
 import { PROGRESSIVE_URLS, blockRules, selectors, type ProgressiveUrls } from './selectors.js';
 
@@ -52,8 +52,8 @@ const timer = () => {
   return () => Date.now() - start;
 };
 
-/** The suffix of the whole-card PDF's document ID ("idcard-1-pdf"). */
-const ALL_PAGES = '-pdf';
+/** Document IDs of a card's further images: "idcard-1-image2", "idcard-1-image3", ... */
+const IMAGE = '-image';
 
 const MFA_HINT = 'Progressive texted a code to the phone on your account.';
 
@@ -297,51 +297,56 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const policies = await this.accountPolicies(page, w);
     this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
-    // Per policy: the card's first image, served as it came (the headline document), then the
-    // whole card as one PDF, converted lazily while the rest is prefetched.
-    const docs = policies.flatMap((p, i): DocumentMeta[] => {
+    // Opening the ID cards page makes the app fetch each card (as images). Each image is its own
+    // document, served as it came: no conversion. The list waits for the cards so it knows how
+    // many there are; the first document needs the first card anyway.
+    await this.documentTemplate(page);
+    const docs: DocumentMeta[] = [];
+    for (const [i, p] of policies.entries()) {
       const id = `idcard-${i + 1}`;
       map.set(id, p);
       const masked = maskPolicyNumber(p.number);
       const extra = masked ? { policyNumberMasked: masked } : {};
-      return [
-        { id, title: 'ID card', kind: 'id_card', mimeType: 'image/png', ...extra },
-        {
-          id: `${id}${ALL_PAGES}`,
-          title: 'ID card (all pages, PDF)',
+      // A card the app didn't fetch comes later from our own request, as one PDF.
+      let types: string[] = ['application/pdf'];
+      if (w.appAsked.some((a) => a.number === p.number)) {
+        try {
+          const files = await this.cardResponse(page, p);
+          const n = cardFiles(files).length;
+          if (n > 0) types = Array.from({ length: n }, (_, k) => cardFile(files, k).mimeType);
+        } catch {
+          types = ['application/pdf']; // listed anyway; fetching it reports the problem
+        }
+      }
+      types.forEach((mimeType, k) => {
+        docs.push({
+          id: k === 0 ? id : `${id}${IMAGE}${k + 1}`,
+          title: types.length > 1 ? `ID card (image ${k + 1} of ${types.length})` : 'ID card',
           kind: 'id_card',
-          mimeType: 'application/pdf',
+          mimeType,
           ...extra,
-        },
-      ];
-    });
+        });
+      });
+    }
     this.policies.set(page, map);
     return sortDocuments(docs);
   }
 
   async fetchDocument(page: Page, documentId: string): Promise<DocumentContent> {
-    const allPages = documentId.endsWith(ALL_PAGES);
-    const cardId = allPages ? documentId.slice(0, -ALL_PAGES.length) : documentId;
+    const m = new RegExp(`^(idcard-\\d+)(?:${IMAGE}(\\d+))?$`).exec(documentId);
+    if (!m?.[1]) throw new AppError('NOT_FOUND');
+    const cardId = m[1];
+    const index = m[2] ? Number(m[2]) - 1 : 0;
     if (!this.policies.get(page)?.has(cardId)) await this.listDocuments(page);
     const policy = this.policies.get(page)?.get(cardId);
     if (!policy) throw new AppError('NOT_FOUND');
-    const files = await this.cardFiles(page, policy);
-
-    if (!allPages) {
-      const first = firstCardFile(files);
-      return {
-        mimeType: first.mimeType,
-        filename: `progressive-${cardId}.${first.extension}`,
-        body: first.bytes,
-      };
-    }
-    const c = timer();
-    const bytes = await idCardFromDocuments(files);
-    this.log('progressive id card converted', {
-      convertMs: c(),
-      kb: Math.round(bytes.length / 1024),
-    });
-    return { mimeType: 'application/pdf', filename: `progressive-${cardId}.pdf`, body: bytes };
+    const file = cardFile(await this.cardResponse(page, policy), index);
+    const suffix = index === 0 ? '' : `-${index + 1}`;
+    return {
+      mimeType: file.mimeType,
+      filename: `progressive-${cardId}${suffix}.${file.extension}`,
+      body: file.bytes,
+    };
   }
 
   /**
@@ -349,7 +354,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
    * app itself fetched (opening the ID cards page makes it ask): proven to work on the real site,
    * and already here. Otherwise our own request, built from the app's.
    */
-  private async cardFiles(page: Page, policy: Policy): Promise<unknown> {
+  private async cardResponse(page: Page, policy: Policy): Promise<unknown> {
     const w = this.watch(page);
     const t = timer();
     const template = await this.documentTemplate(page);
