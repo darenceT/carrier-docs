@@ -13,7 +13,7 @@ import type {
   DocumentContent,
   LoginOutcome,
 } from '../../core/ports.js';
-import { fetchJsonInPage, filenameFrom, step } from '../shared.js';
+import { fetchJsonInPage, filenameFrom, step, type StepLog } from '../shared.js';
 import { parsePolicies } from './policies.js';
 import { LEMONADE_URLS, blockRules, selectors, type LemonadeUrls } from './selectors.js';
 
@@ -30,6 +30,8 @@ export interface LemonadeAdapterOptions {
   urls?: Partial<LemonadeUrls>;
   /** Timeout for one carrier step (a page load, a login call). Default 30 s. */
   stepTimeoutMs?: number;
+  /** Where sub-step timings go (timings and outcomes only, never values). */
+  log?: StepLog;
 }
 
 /** Lemonade texts the code to the phone on the account; it isn't ours to show. */
@@ -44,6 +46,7 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
   readonly info = LEMONADE_CARRIER;
   private readonly urls: LemonadeUrls;
   private readonly pacing: Pacing;
+  private readonly log: StepLog;
   private readonly timeout: number;
   private readonly detector = new BlockDetector(blockRules);
   /** PDF links from the last listing, per page (the adapter is shared by every session). */
@@ -53,6 +56,7 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
     this.urls = { ...LEMONADE_URLS, ...options.urls };
     this.pacing = options.pacing;
     this.timeout = options.stepTimeoutMs ?? 30_000;
+    this.log = options.log ?? (() => undefined);
   }
 
   async openLogin(page: Page): Promise<void> {
@@ -63,11 +67,24 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
   async login(page: Page, credentials: Credentials): Promise<LoginOutcome> {
     const { email } = credentials;
     if (!email) throw new AppError('VALIDATION_FAILED', 'email');
-    if (!this.onLoginPage(page)) await this.openLogin(page);
+    const started = Date.now();
+    const ms = () => Date.now() - started;
+    const hadForm = this.onLoginPage(page);
+    if (!hadForm) await this.openLogin(page);
+    const formMs = ms();
 
     const field = await this.firstVisible(page, selectors.email, 'email field');
-    await step('email field', () => this.pacing.type(field, email));
+    // Email addresses are usually filled by the browser's autofill, not typed.
+    await step('email field', () => this.pacing.autofill(field, email));
+    const typedMs = ms();
     const presign = await this.awaitCall(page, this.urls.presign, () => field.press('Enter'));
+    this.log('lemonade login', {
+      prewarmedForm: hadForm,
+      formMs,
+      typedMs,
+      answerMs: ms(),
+      status: presign?.status() ?? 0,
+    });
     if (!presign) return this.failure(page);
 
     const status = presign.status();
@@ -114,14 +131,19 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
   }
 
   async listDocuments(page: Page): Promise<DocumentMeta[]> {
+    const started = Date.now();
+    const onApp = this.onApp(page);
     const { documents, links } = parsePolicies(await this.loadPolicies(page));
+    this.log('lemonade policies', { onApp, count: documents.length, ms: Date.now() - started });
     this.links.set(page, links);
     return documents;
   }
 
   async fetchDocument(page: Page, documentId: string): Promise<DocumentContent> {
     if (!this.links.get(page)?.has(documentId)) await this.listDocuments(page);
+    const started = Date.now();
     let file = await this.download(page, documentId);
+    this.log('lemonade document', { ms: Date.now() - started });
     // The links rotate on every page load and may expire: re-list once for a fresh one.
     if (file === 'expired') {
       await this.listDocuments(page);

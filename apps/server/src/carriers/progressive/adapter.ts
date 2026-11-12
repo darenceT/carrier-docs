@@ -125,33 +125,44 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const { username, password } = credentials;
     if (!username || !password) throw new AppError('VALIDATION_FAILED', 'username and password');
     const w = this.watch(page);
-    if (!(await this.visible(page, selectors.username))) await this.openLogin(page);
+    const t = timer();
+    const hadForm = await this.visible(page, selectors.username);
+    if (!hadForm) await this.openLogin(page);
+    const formMs = t();
 
     await step('login fields', async () => {
       await this.pacing.type(await this.field(page, selectors.username, 'username'), username);
-      await this.pacing.type(await this.field(page, selectors.password, 'password'), password);
+      // Passwords are usually filled by a password manager, not typed.
+      await this.pacing.autofill(await this.field(page, selectors.password, 'password'), password);
     });
+    const typedMs = t();
     await step('sign-in button', () =>
       this.pacing.click(page.getByRole('button', { name: selectors.signIn }).first()),
     );
+    const submittedMs = t();
 
     // Next: the SMS step, straight into the account (device remembered), or a rejection. Some
-    // versions first ask how to send the code; if the flow sits still for 3 s, choose text once.
-    const started = Date.now();
+    // versions first ask how to send the code: choose text as soon as that button shows.
+    const sendText = page.getByRole('button', { name: selectors.sendText }).first();
     let choseText = false;
-    const next = await this.until(page, () => {
+    const next = await this.until(page, async () => {
       if (w.statuses.includes('OTP_REQUIRED')) return 'otp';
       if (this.onApp(page)) return 'in';
       if (w.credentialCheck !== undefined && w.credentialCheck >= 400) return 'rejected';
-      if (!choseText && Date.now() - started > 3_000) {
+      if (!choseText && (await sendText.isVisible().catch(() => false))) {
         choseText = true;
-        void page
-          .getByRole('button', { name: selectors.sendText })
-          .first()
-          .click({ timeout: 2_000 })
-          .catch(() => undefined);
+        void this.pacing.click(sendText).catch(() => undefined);
       }
       return undefined;
+    });
+    this.log('progressive login', {
+      prewarmedForm: hadForm,
+      formMs,
+      typedMs,
+      submittedMs,
+      choseText,
+      answerMs: t(),
+      result: next ?? 'no answer',
     });
 
     if (next === 'otp') return { kind: 'mfa_required', hint: MFA_HINT };

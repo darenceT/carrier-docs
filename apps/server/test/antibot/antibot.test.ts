@@ -95,8 +95,20 @@ describe('pacing', () => {
     const { t, calls } = target();
     await pacing.type(t, 'abc');
     await pacing.click(t);
-    expect(sleeps).toEqual([275, 350]);
-    expect(calls).toEqual(['click:60', 'type:abc:75', 'click:80']);
+    expect(sleeps).toEqual([175, 350]);
+    expect(calls).toEqual(['click:60', 'type:abc:50', 'click:80']);
+  });
+
+  it('autofills a field in one go after a short pause, like a password manager', async () => {
+    const sleeps: number[] = [];
+    const pacing = lightPacing({ random: () => 0.5, sleep: async (ms) => void sleeps.push(ms) });
+    const { t, calls } = target();
+    await pacing.autofill(t, 'secret');
+    expect(sleeps).toEqual([175]);
+    expect(calls).toEqual(['click:60', 'fill:secret']);
+    const instant = target();
+    await noPacing.autofill(instant.t, 'secret');
+    expect(instant.calls).toEqual(['fill:secret']);
   });
 
   it('stays within its bounds at the extremes', async () => {
@@ -107,11 +119,11 @@ describe('pacing', () => {
         t,
         'x',
       );
-      expect(sleeps[0]).toBeGreaterThanOrEqual(150);
-      expect(sleeps[0]).toBeLessThanOrEqual(400);
+      expect(sleeps[0]).toBeGreaterThanOrEqual(100);
+      expect(sleeps[0]).toBeLessThanOrEqual(250);
       const delay = Number(calls[1]!.split(':')[2]);
-      expect(delay).toBeGreaterThanOrEqual(40);
-      expect(delay).toBeLessThanOrEqual(110);
+      expect(delay).toBeGreaterThanOrEqual(30);
+      expect(delay).toBeLessThanOrEqual(70);
     }
   });
 });
@@ -229,6 +241,29 @@ describe('createAntibot', () => {
     expect(launches).toEqual([]);
     expect(await progressive.pool.browserVersion()).toBe('141.0.0.1');
     expect(launches).toEqual(['patched-headless']);
+    await antibot.close();
+  });
+
+  it('warmup launches each strategy the carriers use, once', async () => {
+    const launches: BrowserStrategy[] = [];
+    const antibot = createAntibot(config, {
+      logger: captureLogger().logger,
+      createProvider: (strategy) => ({
+        strategy,
+        launch: vi.fn(async () => {
+          launches.push(strategy);
+          return {
+            once: () => undefined,
+            version: () => '141.0.0.1',
+            close: async () => {},
+          } as unknown as Browser;
+        }),
+      }),
+    });
+    await antibot.warmup(['progressive', 'demo', 'lemonade']);
+    expect(launches.sort()).toEqual(['patched-headed', 'patched-headless']);
+    await antibot.warmup(['progressive']);
+    expect(launches).toHaveLength(2); // already warm
     await antibot.close();
   });
 

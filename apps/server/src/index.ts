@@ -40,6 +40,8 @@ const app = createApp({
 });
 const server = app.listen(config.port, () => {
   logger.info({ port: config.port, env: config.env }, 'carrier-docs listening');
+  // On the deployment only: locally and in tests a browser starts when first needed.
+  if (config.env === 'production') void services.warmup();
 });
 
 const shutdown = createShutdown({

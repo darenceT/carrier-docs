@@ -33,6 +33,8 @@ const LOGIN_HTML = `<!doctype html><html><body>
 <div id="creds"><label for="uid">User ID</label><input id="uid">
   <label for="pw">Password</label><input id="pw" type="password">
   <button id="signin">Sign In</button></div>
+<div id="channel" hidden><p>How should we send your code?</p>
+  <button id="sendtext">Text me a code</button></div>
 <div id="otp" hidden><label for="vc">Verification code</label><input id="vc">
   <button id="verify">Verify</button><p id="err"></p></div>
 <div id="remember" hidden>
@@ -49,8 +51,14 @@ call();
 document.getElementById('signin').onclick = async () => {
   const r = await call('checkUsernamePassword', { username: uid.value, password: pw.value });
   if (!r.ok) return;
-  await call('authenticate');
-  creds.hidden = true; otp.hidden = false;
+  const a = await (await call('authenticate')).json();
+  creds.hidden = true;
+  if (a.status === 'DEVICE_SELECTION_REQUIRED') { channel.hidden = false; return; }
+  otp.hidden = false;
+};
+document.getElementById('sendtext').onclick = async () => {
+  await call('selectDevice', { device: 'sms' });
+  channel.hidden = true; otp.hidden = false;
 };
 const verifyCode = async () => {
   verify.disabled = true;
@@ -107,6 +115,8 @@ const SPIKE_HANDSHAKE = {
 let signed = true;
 /** The account home shows the "ID Cards" link (off: only going there directly works). */
 let homeHasLink = true;
+/** After the password, the flow first asks how to send the code. */
+let askChannel = false;
 /** The login page submits the code itself at six digits. */
 let autoSubmit = false;
 /** What the imitation's handshake returns; tests swap it to imitate a changed response. */
@@ -170,7 +180,10 @@ function createPortal(): http.Server {
           }
           return json(200, { status: 'AUTHENTICATION_REQUIRED' });
         }
-        if (action === 'authenticate') return json(200, { status: 'OTP_REQUIRED' });
+        if (action === 'authenticate') {
+          return json(200, { status: askChannel ? 'DEVICE_SELECTION_REQUIRED' : 'OTP_REQUIRED' });
+        }
+        if (action === 'selectDevice') return json(200, { status: 'OTP_REQUIRED' });
         if (action === 'checkOtp') {
           return b.otp === CODE
             ? json(200, { status: 'MFA_COMPLETED' })
@@ -281,6 +294,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       handshakeBody = SPIKE_HANDSHAKE;
       signed = true;
       autoSubmit = false;
+      askChannel = false;
       homeHasLink = true;
       appFetches = [
         ['1111', 'WA-AA'],
@@ -397,6 +411,17 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(file.mimeType).toBe('application/pdf');
       await ctx2.close();
     }, 20_000); // two full logins
+
+    it('chooses "text me" as soon as the flow asks how to send the code', async () => {
+      askChannel = true;
+      await adapter.openLogin(page);
+      const started = Date.now();
+      expect(await adapter.login(page, { username: USER, password: PASS })).toMatchObject({
+        kind: 'mfa_required',
+      });
+      expect(Date.now() - started).toBeLessThan(2_500); // was a fixed 3 s wait first
+      expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
+    });
 
     it('asks again after a wrong code', async () => {
       await adapter.openLogin(page);
