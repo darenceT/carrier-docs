@@ -46,7 +46,20 @@ export function createApi(deps: ApiDeps): Middleware {
   ].map((router) => router.routes() as Middleware);
 
   const pipeline = compose<Parameters<Middleware>[0]>([
-    pinoLogger({ logger: deps.logger, genReqId, customProps: sessionIdProps }),
+    pinoLogger({
+      logger: deps.logger,
+      genReqId,
+      customProps: sessionIdProps,
+      // Only what's needed to trace a request: no headers (client IPs, user agent, cookies).
+      serializers: {
+        req: (req: { id?: unknown; method?: string; url?: string }) => ({
+          id: req.id,
+          method: req.method,
+          url: req.url,
+        }),
+        res: (res: { statusCode?: number }) => ({ statusCode: res.statusCode }),
+      },
+    }),
     errorHandler(deps.logger),
     jsonBody(),
     accessRoutes({ accessCode, gate, limits }).routes() as Middleware,

@@ -429,7 +429,10 @@ export class SessionManager<Page> implements SessionService {
           s.cache.set(doc.id, await adapter.fetchDocument(page, doc.id));
         } catch (err) {
           // One missing document isn't a failed session; a click retries from the saved session.
-          this.o.logger.warn({ sessionId: s.id, code: codeOf(err) }, 'prefetch failed');
+          this.o.logger.warn(
+            { sessionId: s.id, code: codeOf(err), step: stepOf(err) },
+            'prefetch failed',
+          );
         }
       }
     })();
@@ -466,7 +469,12 @@ export class SessionManager<Page> implements SessionService {
       );
     } catch (err) {
       // A failed save costs the next run a full login; this run carries on.
-      this.o.logger.warn({ sessionId: s.id, code: codeOf(err) }, 'session save failed');
+      this.o.logger.warn(
+        isAppError(err)
+          ? { sessionId: s.id, code: err.code, step: stepOf(err) }
+          : { sessionId: s.id, code: 'INTERNAL', err },
+        'session save failed',
+      );
     }
   }
 
@@ -504,7 +512,10 @@ export class SessionManager<Page> implements SessionService {
       return true;
     } catch (err) {
       // Best effort: the login will open its own page.
-      this.o.logger.info({ sessionId: s.id, code: codeOf(err) }, 'prewarm failed');
+      this.o.logger.info(
+        { sessionId: s.id, code: codeOf(err), step: stepOf(err) },
+        'prewarm failed',
+      );
       return false;
     }
   }
@@ -687,8 +698,8 @@ export class SessionManager<Page> implements SessionService {
     }
     if (code === 'INTERNAL') this.o.logger.error({ sessionId: s.id, err }, 'session failed');
     else if (code === 'CARRIER_UNAVAILABLE' && (isBrowserGone(err) || this.pageGone(s))) {
-      this.o.logger.warn({ sessionId: s.id, code }, 'browser went away');
-    } else this.o.logger.info({ sessionId: s.id, code }, 'session failed');
+      this.o.logger.warn({ sessionId: s.id, code, step: stepOf(err) }, 'browser went away');
+    } else this.o.logger.info({ sessionId: s.id, code, step: stepOf(err) }, 'session failed');
     this.fail(s, code);
   }
 
@@ -773,6 +784,15 @@ export class SessionManager<Page> implements SessionService {
 function codeOf(err: unknown): ErrorCode {
   if (isAppError(err)) return err.code;
   return isBrowserGone(err) ? 'CARRIER_UNAVAILABLE' : 'INTERNAL';
+}
+
+/**
+ * Which step failed, for logs: an AppError's detail is our own wording ("code field",
+ * "ID cards link", "document 500"), never page content or user data. Other errors are logged
+ * whole under `err` at INTERNAL.
+ */
+function stepOf(err: unknown): string | undefined {
+  return isAppError(err) ? err.message.slice(0, 120) : undefined;
 }
 
 const DRAIN_POLL_MS = 100;
