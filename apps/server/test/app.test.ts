@@ -59,6 +59,18 @@ describe('with the API mounted', () => {
     expect(res.text).toContain('<p>hi</p>');
   });
 
+  it('makes browsers re-check the page after a deploy, and cache the hashed bundles', async () => {
+    const webDistDir = path.join(tmp, 'web-cache');
+    await mkdir(path.join(webDistDir, 'assets'), { recursive: true });
+    await writeFile(path.join(webDistDir, 'index.html'), '<!doctype html>');
+    await writeFile(path.join(webDistDir, 'assets', 'index-abc123.js'), 'void 0');
+    const app = createApp({ webDistDir, api }).callback();
+    expect((await request(app).get('/')).headers['cache-control']).toBe('no-cache');
+    expect((await request(app).get('/assets/index-abc123.js')).headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    );
+  });
+
   it('gates /api routes', async () => {
     const res = await request(createApp({ api }).callback()).get('/api/carriers');
     expect(res.status).toBe(401);

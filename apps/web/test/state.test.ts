@@ -244,6 +244,20 @@ describe('full MFA flow', () => {
     expect(screenOf(s)).toBe('mfa');
     expect(s.mfaError?.code).toBe('RATE_LIMITED');
   });
+
+  it('keeps waiting, with no error, if the reply fails after the stream says the code is being checked', () => {
+    const s = run(
+      [
+        { type: 'mfa_required', attemptsLeft: 3, lastAttemptRejected: false },
+        { type: 'mfa_submitted' },
+        status('verifying_mfa'),
+        { type: 'mfa_post_failed', error: { code: 'INTERNAL', message: 'Something went wrong' } },
+      ],
+      started(),
+    );
+    expect(screenOf(s)).toBe('waiting');
+    expect(s.mfaError).toBeUndefined();
+  });
 });
 
 describe('fast path without MFA', () => {

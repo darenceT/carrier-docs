@@ -201,6 +201,9 @@ export function reducer(state: State, action: Action): State {
       // 202: the code was handed to the carrier; the stream reports the outcome.
       return state;
     case 'mfa_post_failed':
+      // The stream is the authority: once it says the code is being checked (or later), the
+      // server has the code, and a failed reply must not bring back the form with an error.
+      if (state.finished || (state.status && PAST_MFA.has(state.status))) return state;
       return { ...state, mfaSubmitting: false, mfaError: action.error };
 
     // ---------- session events (SSE) ----------
@@ -281,6 +284,14 @@ export function reducer(state: State, action: Action): State {
       return { ...state, forgetError: action.message };
   }
 }
+
+/** Statuses that mean the server already has the MFA code. */
+const PAST_MFA: ReadonlySet<SessionStatus> = new Set([
+  'verifying_mfa',
+  'fetching_docs',
+  'document_ready',
+  'done',
+]);
 
 /** Which main screen to show. Derived, so it can never disagree with the state. */
 export type Screen = 'access' | 'login' | 'starting' | 'mfa' | 'waiting' | 'documents' | 'failed';
