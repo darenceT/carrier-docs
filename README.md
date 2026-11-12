@@ -97,22 +97,24 @@ Loom walkthrough: _link to add_.
 
 ### Measured
 
-| Path                                           | Before the code | After the code  | Notes                                               |
-| ---------------------------------------------- | --------------- | --------------- | --------------------------------------------------- |
-| Progressive, first login (password + SMS code) | 3.2 s           | 13.4 s          | Five runs: 13.4 to 14.7 s                           |
-| Progressive, saved session, pre-warmed         | n/a             | **7.4 s** total | Submitted 6 s after picking the carrier             |
-| Progressive, saved session, not pre-warmed     | n/a             | 14.0 s total    | Before the saved-session pre-warm existed           |
-| Lemonade, first login (email + SMS code)       | 5.6 s           | **7.2 s**       | 13.3 s before the code when the pre-warm was unused |
-| Lemonade, saved session, pre-warmed            | n/a             | **3.5 s** total | Submitted 6.5 s after picking the carrier           |
+| Path                                           | Before the code | After the code  | Notes                                        |
+| ---------------------------------------------- | --------------- | --------------- | -------------------------------------------- |
+| Progressive, first login (password + SMS code) | 3.2 s           | 13.4 s          | Five runs: 13.4 to 14.7 s                    |
+| Progressive, saved session, pre-warmed         | n/a             | **7.4 s** total | Submitted 6 s after picking the carrier      |
+| Progressive, saved session, not pre-warmed     | n/a             | 14.0 s total    | Before the saved-session pre-warm existed    |
+| Lemonade, first login (email + SMS code)       | 1.4 s           | **7.2 s**       | 13.3 s once, on a retry right after a deploy |
+| Lemonade, saved session, pre-warmed            | n/a             | **3.5 s** total | Submitted 6.5 s after picking the carrier    |
 
 Notes on reading these:
 
 - **A pre-warmed run depends on the head start.** The server starts when the carrier is picked;
   both runs above had only about 6 s before submit. With more typing time the documents are
   ready at submit. With none, the run takes as long as "not pre-warmed".
-- **One Lemonade first login took 13.3 s before the code** because its pre-warmed login page was
-  not used (expired or failed; not yet diagnosed), so the page loaded from scratch after submit.
-  With the pre-warm used, that step measured 5.6 s.
+- **Lemonade before the code: 1.4 s with the pre-warmed page** (the latest run; 5.6 s in an
+  earlier one, before the login speed-ups). One run took 13.3 s: a deploy restarted the server
+  while that login was waiting for its code, and the retry started with no pre-warm on a server
+  that had just booted. The deploy also showed that the browser was closed at once on the
+  shutdown signal, defeating the 25 s drain; fixed since, so logins in flight can finish.
 
 ### Where the time goes (Progressive, after the code: 13.5 s)
 
