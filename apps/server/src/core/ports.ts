@@ -33,6 +33,12 @@ export interface SavedSession {
   storageState: unknown;
   fingerprint: FingerprintProfile;
   savedAt: number;
+  /**
+   * Only on the "last session of this browser for this carrier" copy: the reuse key of the
+   * session it copies. Lets a pre-warm (which doesn't know the username yet) open the saved
+   * session early; a login may use the result only if its own reuse key equals this one.
+   */
+  reuseKey?: string;
 }
 
 /**

@@ -40,6 +40,8 @@ class FakeCarrier implements CarrierAdapter<FakePage> {
   };
   logins = 0;
   opened = 0;
+  /** listDocuments calls. */
+  lists = 0;
   /** Saved sessions the "carrier" still accepts. */
   readonly validSessions = new Set<string>();
   /** How long the carrier takes to accept a code. */
@@ -80,6 +82,7 @@ class FakeCarrier implements CarrierAdapter<FakePage> {
   }
 
   async listDocuments(page: FakePage): Promise<DocumentMeta[]> {
+    this.lists += 1;
     if (!page.user) throw new AppError('SESSION_EXPIRED');
     return page.user === 'empty' ? [] : DOCS;
   }
@@ -444,6 +447,87 @@ describe('SessionManager: saved sessions (fast path)', () => {
   });
 });
 
+describe('SessionManager: pre-warm of a saved session', () => {
+  /** A full login for alice, leaving a saved session the carrier accepts. */
+  const alreadyLoggedIn = async () => {
+    const first = await login('o1', 'alice');
+    await settle();
+    await manager.submitMfa('o1', first.sessionId, CODE);
+    await settle();
+    carrier.validSessions.add('alice');
+  };
+
+  it('opens the saved session at carrier selection and fetches the documents ahead', async () => {
+    await alreadyLoggedIn();
+    const { lists, logins } = carrier;
+
+    const { sessionId: pw } = await manager.prewarm('o1', 'demo');
+    await settle();
+    expect(carrier.lists).toBe(lists + 1); // fetched before any login was submitted
+    // Nothing is released on the pre-warm itself: it can't be followed or read at all.
+    expect(() => manager.subscribe('o1', pw, () => undefined)).toThrow(
+      expect.objectContaining({ code: 'NOT_FOUND' }),
+    );
+    await expect(manager.getDocument('o1', pw, 'card')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    const created = browser.created;
+    const { sessionId, events } = await login('o1', 'alice', { prewarmSessionId: pw });
+    await settle();
+    // No login steps (the first ones can be over before the stream connects: see the timings).
+    const final = events.filter((e) => e.type === 'status').pop();
+    expect(final).toMatchObject({ status: 'done' });
+    const steps = final?.type === 'status' ? final.timings.map((t) => t.step) : [];
+    expect(steps).toEqual(['checking_session', 'fetching_docs', 'document_ready']);
+    expect(events.find((e) => e.type === 'documents_listed')).toMatchObject({ documents: DOCS });
+    expect(carrier.lists).toBe(lists + 1); // the login reused what the pre-warm fetched
+    expect(carrier.logins).toBe(logins);
+    expect(browser.created).toBe(created); // and its browser session
+    expect((await manager.getDocument('o1', sessionId, 'card')).filename).toBe('card.pdf');
+    expect(browser.open).toBe(0);
+  });
+
+  it('never gives the pre-warmed session to a login with another username', async () => {
+    await alreadyLoggedIn();
+    const { sessionId: pw } = await manager.prewarm('o1', 'demo');
+    await settle();
+
+    const { events } = await login('o1', 'bob', { prewarmSessionId: pw });
+    await settle();
+    // bob gets an ordinary login with a code, and none of alice's documents.
+    expect(statuses(events)).toEqual(['logging_in', 'mfa_required']);
+    expect(events.some((e) => e.type === 'documents_listed')).toBe(false);
+    expect(browser.open).toBe(1); // alice's pre-warmed session was closed; only bob's is open
+  });
+
+  it('forgets a saved session the carrier no longer accepts, and logs in on the same page', async () => {
+    await alreadyLoggedIn();
+    carrier.validSessions.delete('alice');
+    const { sessionId: pw } = await manager.prewarm('o1', 'demo');
+    await settle();
+    expect(await store.get('reuse|o1|demo|alice')).toBeUndefined();
+    expect(await store.get('last|o1|demo')).toBeUndefined();
+
+    const created = browser.created;
+    const { events } = await login('o1', 'alice', { prewarmSessionId: pw });
+    await settle();
+    expect(browser.created).toBe(created); // the pre-warmed page is used for the login
+    expect(statuses(events)[0]).toBe('logging_in');
+  });
+
+  it('"Forget me" removes the saved copy the pre-warm reads', async () => {
+    await alreadyLoggedIn();
+    expect((await store.get('last|o1|demo'))?.reuseKey).toBe('reuse|o1|demo|alice');
+    await manager.forget('o1');
+    expect(await store.get('last|o1|demo')).toBeUndefined();
+    const { lists } = carrier;
+    await manager.prewarm('o1', 'demo');
+    await settle();
+    expect(carrier.lists).toBe(lists); // an ordinary pre-warm: login page only
+  });
+});
+
 describe('SessionManager: pre-warm', () => {
   it('a login adopts its pre-warmed page and slot', async () => {
     const { sessionId: pw } = await manager.prewarm('o1', 'demo');
@@ -495,7 +579,12 @@ describe('SessionManager: pre-warm', () => {
     await settle();
     const { events } = await login('o1', 'nomfa', { prewarmSessionId: pw });
     await settle();
-    expect(statuses(events)[0]).toBe('checking_session');
+    // The saved session, not a new login (the pre-warm had already opened it, so the first
+    // steps can be over before the stream connects: read them from the timings).
+    const final = events.filter((e) => e.type === 'status').pop();
+    const steps = final?.type === 'status' ? final.timings.map((t) => t.step) : [];
+    expect(steps).toContain('checking_session');
+    expect(steps).not.toContain('logging_in');
     expect(last(events)).toEqual({ type: 'done' });
     expect(browser.open).toBe(0);
   });
