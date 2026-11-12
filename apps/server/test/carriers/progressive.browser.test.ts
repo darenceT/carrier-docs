@@ -15,6 +15,7 @@ import type { BrowserContext, Page } from 'patchright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { noPacing } from '../../src/antibot/pacing.js';
 import { ProgressiveAdapter } from '../../src/carriers/progressive/adapter.js';
+import { carrierContract } from './contract.js';
 
 const USER = 'renter1';
 const PASS = 'pw-123';
@@ -274,5 +275,13 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.isSessionValid(await empty.newPage())).toBe(false);
       await empty.close();
     });
+
+    carrierContract(() => ({
+      adapter,
+      browser,
+      valid: () => ({ username: USER, password: PASS }),
+      mfaCode: CODE,
+      wrong: { username: USER, password: 'nope' },
+    }));
   },
 );
