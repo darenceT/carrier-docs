@@ -61,6 +61,8 @@ const schema = z.object({
   // Local runs and tests only ever load the mock portal; Render lists the real carriers.
   CANARY_CARRIERS: carrierList.default(['demo']),
   EGRESS_PROXY_URL: z.url().optional(),
+  // Skip pictures, fonts and third-party trackers on carrier pages (antibot/resources.ts).
+  RESOURCE_BLOCKING: bool.default(true),
   // 'poll' if SSE arrives in bursts through the hosting proxy (design D8).
   EVENTS_TRANSPORT: z.enum(['sse', 'poll']).default('sse'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -88,6 +90,8 @@ export interface Config {
   demoCarrierEnabled: boolean;
   browserStrategy: Record<'progressive' | 'carrier2', BrowserStrategy>;
   egressProxyUrl: string | undefined;
+  /** Skip pictures, fonts and third-party trackers on real carrier pages. */
+  resourceBlocking: boolean;
   /** How the UI follows a session; see EventsTransport. */
   eventsTransport: 'sse' | 'poll';
   logLevel: string;
@@ -141,6 +145,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     demoCarrierEnabled: c.DEMO_CARRIER_ENABLED,
     browserStrategy: { progressive: c.PROGRESSIVE_BROWSER, carrier2: c.CARRIER2_BROWSER },
     egressProxyUrl: c.EGRESS_PROXY_URL,
+    resourceBlocking: c.RESOURCE_BLOCKING,
     eventsTransport: c.EVENTS_TRANSPORT,
     logLevel: c.LOG_LEVEL,
   };

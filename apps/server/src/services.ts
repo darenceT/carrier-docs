@@ -5,6 +5,7 @@ import type { Logger } from 'pino';
 import { runCanary, type CanaryReport } from './canary/canary.js';
 import { canaryTargets } from './canary/targets.js';
 import { createAntibot, createFingerprint, refreshFingerprint } from './antibot/index.js';
+import { blockResources } from './antibot/resources.js';
 import { DemoAdapter } from './carriers/demo/adapter.js';
 import { LEMONADE_CARRIER, LemonadeAdapter } from './carriers/lemonade/adapter.js';
 import { PROGRESSIVE_CARRIER, ProgressiveAdapter } from './carriers/progressive/adapter.js';
@@ -75,10 +76,23 @@ export function createServices(config: Config, logger: Logger): Services {
   }
 
   const browserFor = (carrierId: string): CarrierBrowser<Page> => {
-    const { pool, egress } = antibot.forCarrier(carrierId);
+    const { pool, egress, blockResources: block } = antibot.forCarrier(carrierId);
     return {
       browserVersion: () => pool.browserVersion(),
-      newContext: (options) => pool.newContext(options),
+      newContext: async (options) => {
+        const context = await pool.newContext(options);
+        if (!block) return context;
+        // Every page of a real carrier skips pictures, fonts and trackers from its first request.
+        return {
+          newPage: async () => {
+            const page = await context.newPage();
+            await blockResources(page, carrierLog.child({ carrierId }));
+            return page;
+          },
+          close: () => context.close(),
+          storageState: () => context.storageState(),
+        };
+      },
       proxy: () => egress.proxy(),
     };
   };
