@@ -59,15 +59,36 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
-      # Build only (Render builds its own image from the repo). Layers are cached in GitHub
-      # Actions, so unchanged dependency and browser layers aren't rebuilt.
+      # Render builds its own image from the repo; this one is only checked. Layers are cached in
+      # GitHub Actions, so unchanged dependency and browser layers aren't rebuilt.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: false
-          tags: carrier-docs:ci
+          # Loaded under the tag docker-compose.yml uses, for the quick-start check below.
+          load: true
+          tags: carrier-docs:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The README quick start, verbatim: cp .env.example .env && docker compose up.
+      - name: Quick start works from .env.example
+        run: |
+          cp .env.example .env
+          docker compose up -d --no-build
+          for i in $(seq 1 30); do curl -fsS localhost:3000/healthz && break; sleep 2; done
+          curl -fsS localhost:3000/healthz
+          curl -fsS localhost:3000/ | grep -q 'id="root"'
+          # Values come from .env, so the workflow holds no token-shaped literals.
+          env_value() { grep "^$1=" .env | cut -d= -f2-; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/api/access \
+            -H 'Content-Type: application/json' -d "{\"code\":\"$(env_value ACCESS_CODE)\"}")
+          test "$code" = 204
+          # The image's patched Chromium loads the mock portal's login page (CANARY_CARRIERS=demo).
+          curl -fsS --max-time 60 -X POST localhost:3000/internal/canary \
+            -H "Authorization: Bearer $(env_value CANARY_TOKEN)"
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
 
   secrets:
     runs-on: ubuntu-latest

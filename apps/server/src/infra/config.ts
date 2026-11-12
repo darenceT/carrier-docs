@@ -28,6 +28,17 @@ const carrierList = z
   )
   .pipe(z.array(z.enum(CANARY_CARRIERS)));
 
+/**
+ * The values .env.example ships so `cp .env.example .env && docker compose up` works with no
+ * setup. They are public, so the server refuses them on Render (which sets RENDER=true).
+ */
+export const LOCAL_DEV_SECRETS = {
+  // Built from readable text (exactly 32 bytes) so it is plainly not a secret.
+  SESSION_KEY: Buffer.from('local-dev-only-key-not-a-secret!').toString('base64'),
+  ACCESS_CODE: 'local-dev-access-code',
+  CANARY_TOKEN: 'local-dev-canary-token',
+} as const;
+
 const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
 const schema = z.object({
@@ -99,6 +110,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const c = parsed.data;
+  if (cleaned.RENDER) {
+    const reused = (Object.keys(LOCAL_DEV_SECRETS) as (keyof typeof LOCAL_DEV_SECRETS)[]).filter(
+      (k) => c[k] === LOCAL_DEV_SECRETS[k],
+    );
+    if (reused.length > 0) {
+      throw new ConfigError(
+        reused.map((k) => `${k}: is the public value from .env.example; set a real one`),
+      );
+    }
+  }
   return {
     env: c.NODE_ENV,
     port: c.PORT,
