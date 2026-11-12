@@ -15,6 +15,7 @@ import type {
 } from '../../core/ports.js';
 import { isBrowserGone } from '../../browser/errors.js';
 import {
+  Signal,
   type StepLog,
   describeShape,
   evaluateInPage,
@@ -22,6 +23,7 @@ import {
   maskPolicyNumber,
   sortDocuments,
   step,
+  waitUntil,
 } from '../shared.js';
 import { cardFile, cardFiles } from './document.js';
 import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
@@ -70,6 +72,8 @@ interface Template {
  * logged.
  */
 class Watch {
+  /** Fires whenever something below changes, or the page navigates: waits re-check then. */
+  readonly changed = new Signal();
   statuses: string[] = [];
   credentialCheck?: number;
   otpChecks: number[] = [];
@@ -496,6 +500,10 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     this.watches.set(page, w);
     page.on('request', (req) => void this.onRequest(created, req));
     page.on('response', (res) => void this.onResponse(created, res));
+    // Waits also look at the page's URL (on the account yet? the session-timeout page?).
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) created.changed.notify();
+    });
     return w;
   }
 
@@ -515,6 +523,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
           w.template ??= { url: req.url(), headers, body: body as Record<string, unknown> };
           const asked = policyFromDocumentUrl(req.url());
           if (asked && !w.appAsked.some((p) => p.number === asked.number)) w.appAsked.push(asked);
+          w.changed.notify();
         }
       } catch {
         // not JSON: not the request we want
@@ -528,9 +537,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       const action = new URL(url).searchParams.get('action');
       if (action === 'checkUsernamePassword') w.credentialCheck = res.status();
       if (action === 'checkOtp') w.otpChecks.push(res.status());
+      w.changed.notify();
       const body = (await res.json().catch(() => undefined)) as { status?: unknown } | undefined;
       if (typeof body?.status === 'string' && /^[A-Z_]{3,40}$/.test(body.status)) {
         w.statuses.push(body.status);
+        w.changed.notify();
       }
       return;
     }
@@ -539,6 +550,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       const found = findPolicies(body);
       if (found.length > 0) w.handshakePolicies ??= found;
       else w.handshakeShape ??= describeShape(body);
+      w.changed.notify();
       return;
     }
     // The app's own ID-card response (not ours: ours are made with fetch in the page too, but
@@ -555,6 +567,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       const ok = res.ok();
       const json: unknown = ok ? await res.json().catch(() => undefined) : undefined;
       w.appCards.set(card.number, { status: res.status(), json });
+      w.changed.notify();
     }
   }
 
@@ -610,24 +623,29 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   }
 
   /**
-   * Polls `check` until it returns a value; null on timeout. Stops at once on Progressive's
-   * session-timeout page: nothing we wait for comes after it (it cost 90 s of timeouts once).
+   * Waits until `check` returns a value; null on timeout. It re-checks the moment the page's own
+   * traffic or URL changes (see Watch), and every 200 ms for what nothing signals (an element
+   * showing). Stops at once on Progressive's session-timeout page: nothing we wait for comes
+   * after it (it cost 90 s of timeouts once).
    */
   private async until<T>(
     page: Page,
     check: () => T | undefined | Promise<T | undefined>,
     timeoutMs = this.timeout,
   ): Promise<T | null> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (this.onSessionTimeout(page)) {
-        throw new AppError('SESSION_EXPIRED', 'progressive session-timeout page');
-      }
-      const v = await check();
-      if (v !== undefined) return v;
-      await page.waitForTimeout(200);
-    }
-    return null;
+    return waitUntil(
+      () => {
+        if (this.onSessionTimeout(page)) {
+          throw new AppError('SESSION_EXPIRED', 'progressive session-timeout page');
+        }
+        return check();
+      },
+      {
+        signal: this.watch(page).changed,
+        tick: () => page.waitForTimeout(200),
+        timeoutMs,
+      },
+    );
   }
 
   private locator(page: Page, q: { css: readonly string[]; label: RegExp }): Locator {

@@ -197,3 +197,60 @@ export async function step<T>(what: string, fn: () => Promise<T>): Promise<T> {
     throw new AppError('CARRIER_PAGE_CHANGED', what);
   }
 }
+
+/**
+ * Wakes waiters when something they watch changes (a response the adapter was waiting for
+ * arrived, the page navigated), so a wait ends then and not at its next poll.
+ */
+export class Signal {
+  private waiters = new Set<() => void>();
+
+  notify(): void {
+    const waiters = [...this.waiters];
+    this.waiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  /** A promise for the next notify(), and a way to stop waiting for it. */
+  next(): { promise: Promise<void>; cancel: () => void } {
+    let wake!: () => void;
+    const promise = new Promise<void>((resolve) => (wake = resolve));
+    this.waiters.add(wake);
+    return { promise, cancel: () => this.waiters.delete(wake) };
+  }
+}
+
+export interface WaitUntilOptions {
+  /** Re-check as soon as this fires. */
+  signal: Signal;
+  /** Re-check when this resolves too (for conditions nothing signals, e.g. an element showing). */
+  tick: () => Promise<unknown>;
+  timeoutMs: number;
+  now?: () => number;
+}
+
+/**
+ * Waits until `check` returns a value; null on timeout. It re-checks on every signal and every
+ * tick. A rejection from `check` or `tick` (a closed page) ends the wait with that error.
+ */
+export async function waitUntil<T>(
+  check: () => T | undefined | Promise<T | undefined>,
+  { signal, tick, timeoutMs, now = Date.now }: WaitUntilOptions,
+): Promise<T | null> {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    // Listen before checking, so a change that lands while the check runs is not missed.
+    const woken = signal.next();
+    try {
+      const value = await check();
+      if (value !== undefined) return value;
+      const ticked = tick();
+      // If the signal wins, a later rejection of the tick must not go unhandled.
+      ticked.catch(() => undefined);
+      await Promise.race([woken.promise, ticked]);
+    } finally {
+      woken.cancel();
+    }
+  }
+  return null;
+}
