@@ -276,6 +276,31 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)('LemonadeAdapter against a local
     await empty.close();
   });
 
+  it('on a repeat run, lists from the policies the session check loaded: one call, not two', async () => {
+    await logIn();
+    const saved = await context.cookies();
+    const fresh = (await browser.newContext()) as unknown as BrowserContext;
+    await fresh.addCookies(saved);
+    const restored = await fresh.newPage();
+
+    expect(await adapter.isSessionValid(restored)).toBe(true);
+    const afterCheck = portal.tokens.size; // two new links per policies call
+    const docs = await adapter.listDocuments(restored);
+    expect(docs).toHaveLength(2);
+    expect(portal.tokens.size).toBe(afterCheck);
+    const file = await adapter.fetchDocument(restored, docs[0]!.id);
+    expect(
+      Buffer.from(file.body as Uint8Array)
+        .subarray(0, 5)
+        .toString('latin1'),
+    ).toBe('%PDF-');
+
+    // Used once: a later listing asks again, for fresh links.
+    await adapter.listDocuments(restored);
+    expect(portal.tokens.size).toBe(afterCheck + 2);
+    await fresh.close();
+  });
+
   carrierContract(() => ({
     adapter,
     browser,
