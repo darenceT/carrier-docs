@@ -202,10 +202,13 @@ export function StatusPanel(props: {
           {/* After MFA, counted from the code's submission: the wait for the user isn't ours. */}
           <p className="headline" data-testid="headline">
             First document in {formatSeconds(props.afterMfaMs ?? props.firstDocumentMs)}
-            {props.afterMfaMs !== undefined ? ' after your code' : ''}
+            {props.afterMfaMs !== undefined ? ' after submitting the verification code' : ''}
           </p>
           {props.afterMfaMs !== undefined ? (
-            <p data-testid="total">Total from start: {formatSeconds(props.firstDocumentMs)}</p>
+            <p data-testid="total">
+              Total from login start (includes the time to type the code):{' '}
+              {formatSeconds(props.firstDocumentMs)}
+            </p>
           ) : null}
         </>
       ) : null}
