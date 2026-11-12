@@ -68,35 +68,111 @@ npm run dev:web           # Vite on :5173, proxies /api to :3000
 
 ## Supported carriers
 
-| Carrier     | Login                        | Documents                                         | Status                                                                            |
-| ----------- | ---------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Progressive | Username, password, SMS code | In-page API; the ID card PDF comes back as base64 | Real login from Render passed (login, SMS code, repeat run on saved cookies)      |
-| Lemonade    | Email, then SMS code         | In-page API returns a PDF link per policy         | Real login from Render passed (SMS code, policy PDF, repeat run on saved cookies) |
+| Carrier     | Login                        | Documents                                                 | Status                                                                            |
+| ----------- | ---------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Progressive | Username, password, SMS code | The app's own ID card request; one document per card page | Real logins through the deployed app passed (full login and saved session)        |
+| Lemonade    | Email, then SMS code         | In-page API returns a PDF link per policy                 | Real login from Render passed (SMS code, policy PDF, repeat run on saved cookies) |
 
 Loom walkthrough: _link to add_.
 
 ## Latency
 
-Time to first document, measured on Render (Starter, 512 MB): from pressing **Get my documents**
-(or submitting the MFA code) until the ID card bytes reach the browser. Time the user spends
-reading and typing the code is excluded.
+**Target:** login to first document in under 8 s. **Where it stands:** not met for a first login. A
+Progressive login with an SMS code takes about 13.5 s after the code, nearly all of it
+Progressive's own site. For a returning browser the work now starts before the user submits
+(pre-warming), which is where the target is reachable; that path is still to be measured.
 
-| Carrier     | First run (full login + MFA) | Repeat run (saved session) |
-| ----------- | ---------------------------- | -------------------------- |
-| Demo        | _to measure_                 | _to measure_               |
-| Progressive | _to measure_                 | _to measure_               |
-| Lemonade    | _to measure_                 | _to measure_               |
+### What is measured
 
-The table is for the app's own numbers: `GET /api/status` reports p50/p95 time to first document
-per carrier, split by full login, fast path and pre-warmed.
+- **Headline:** time from submitting the verification code until the first document is ready
+  ("First document in X s after submitting the verification code"). The time the user spends
+  reading and typing the code is not counted. A login without a code step counts from the start.
+- **Where the numbers come from:** real logins through the deployed app on Render (Starter:
+  0.5 CPU, 512 MB, Oregon), 2026-11-12. Each step is logged with its duration
+  (`"component":"carrier"` lines); `GET /api/status` reports p50/p95 per carrier.
+- **Sample size:** a handful of runs per path, by hand. Treat them as typical values, not
+  percentiles.
 
-Until those are filled in, the scripted real logins from Render (docs/spike.md, 2026-11-12) give
-the scale. These are script timings with generous waits, not the app's:
+### Measured
 
-| Carrier     | Login page | Credentials accepted | Code accepted | Repeat run on saved cookies |
-| ----------- | ---------- | -------------------- | ------------- | --------------------------- |
-| Progressive | 4.5 s      | 0.9 s                | 1.8 s         | account page in 6.6 s       |
-| Lemonade    | 2.4 s      | 0.7 s (SMS sent)     | 0.9 s         | 3.7 s                       |
+| Path                                           | Before the code | After the code | Notes                                 |
+| ---------------------------------------------- | --------------- | -------------- | ------------------------------------- |
+| Progressive, full login (password + SMS code)  | 3.2 s           | 13.5 s         | Four runs: 13.5 to 14.7 s             |
+| Progressive, saved session (no password, code) | n/a             | 14.0 s total   | Skips login and code; same page loads |
+| Lemonade, full login (email + SMS code)        | 5.6 s           | 11.2 s         | One run, before the login speed-ups   |
+| Lemonade, saved session                        | n/a             | _to measure_   | 3.7 s in the scripted spike run       |
+| Saved session, pre-warmed at carrier selection | n/a             | _to measure_   | See "What is free" below              |
+
+Still to re-measure: four later changes (overlapping the policy list with the ID cards page,
+event-driven waits, one fewer Lemonade policy call, and the saved-session pre-warm) merged after
+these runs.
+
+### Where the time goes (Progressive, after the code: 13.5 s)
+
+| Step                                          | Time        | Whose time                                        |
+| --------------------------------------------- | ----------- | ------------------------------------------------- |
+| Type the code, Progressive checks it          | 1.8 s       | Carrier request (0.6 s of it is our paced typing) |
+| Redirect into the account                     | 0.9 s       | Carrier                                           |
+| Account page starts and loads the policy list | 4.5 s       | Carrier's page, running in our browser on 0.5 CPU |
+| "ID cards" link renders and is clicked        | 2.9 s       | Carrier's page, running in our browser on 0.5 CPU |
+| Progressive's app fetches the ID card         | 2.5 to 3 s  | Carrier request                                   |
+| Our own code between those steps              | under 0.5 s | Ours                                              |
+
+Three kinds of time, and what moves each:
+
+- **Carrier requests (about 5 s):** the carrier's servers answering. Nothing on our side
+  changes this except doing the work earlier.
+- **Carrier pages running on our CPU (about 7.4 s):** Progressive's account is a large
+  single-page app, and we must let it run: its ID card request is the only one the API accepts
+  (our own copy of that request is refused with a 401). This is the part more CPU would shorten.
+  Evidence that the instance is CPU-bound rather than network-bound: the same login pages loaded
+  faster from a home connection than from Render (Progressive 800 ms against 1,068 ms; Lemonade
+  1,317 ms against 1,499 ms; docs/spike.md). How much a bigger instance would save is not
+  measured.
+- **Our code (about 1 s):** paced typing of the code (0.6 s) and what is left after the fixes
+  below.
+
+### What was fixed, with before and after
+
+| Change                                                          | Before | After                      |
+| --------------------------------------------------------------- | ------ | -------------------------- |
+| Clicks that waited out a 30 s timeout in the code step          | 32 s   | 2.7 s                      |
+| Password and email filled in one go; "send text" chosen at once | 5.9 s  | 3.2 s                      |
+| Browser launched at boot, not on the first login                | 1.4 s  | 0                          |
+| ID card shown page by page as sent; no PDF conversion           | 1.4 s  | 0                          |
+| Session-timeout page recognised at once                         | 90 s   | under 3 s (a failure path) |
+
+Tried and removed, because measurement said so:
+
+- **Blocking images, fonts and trackers** on carrier pages: 284 requests blocked, no step got
+  faster, and the card request took about 3 s longer in the one run. Off by default
+  (`RESOURCE_BLOCKING`).
+- **Going straight to the ID cards page:** its address carries the policy number, and jumping
+  there while the app was starting made Progressive show its session-timeout page.
+
+### What is free: doing the work before the user submits
+
+- **Login page pre-warm.** Picking a carrier loads its login page while the user types.
+- **Saved session.** After one login the session is kept encrypted for 7 days; a repeat run
+  skips the password and the code (26.5 s end to end became 14.0 s on Progressive).
+- **Saved-session pre-warm.** For a returning browser, picking the carrier opens the saved
+  session, checks it and fetches the document list and first document ahead. They are released
+  only when a login with the same username arrives. With 15 s between picking the carrier and
+  submitting, the documents can be ready at submit. _To measure on Render._
+
+### What would cost money
+
+| Option                              | Expected effect                                           | Cost and risk                                                         |
+| ----------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
+| Bigger Render instance (more CPU)   | Shortens the 7.4 s of page time; amount not measured      | Next plan up; not taken (budget)                                      |
+| Region nearer the carriers' servers | Perhaps 0.5 to 1.5 s; a guess, the evidence points at CPU | New service, saved sessions lost, a new IP the carriers have not seen |
+| More than one browser slot          | No single-login gain; removes the queue under concurrency | 512 MB fits one session (docs/spike.md)                               |
+
+### Why a first Progressive login cannot reach 8 s here
+
+Progressive's own steps after the code add up to about 13 s on this instance, and about 5 s of
+that is their servers answering, which no hosting change removes. The target is reachable where
+the work can start early: the pre-warmed saved session.
 
 ## Anti-bot and fingerprinting
 
@@ -129,6 +205,9 @@ challenges.
   encrypted and saved per user and carrier for `SESSION_TTL_DAYS` (7). A repeat run checks it
   first and skips login and MFA if the carrier still accepts it; otherwise it falls back to a full
   login and replaces it.
+- **Saved-session pre-warm.** For a returning browser, picking the carrier already opens the
+  saved session and fetches the documents ahead; they are released only to a login with the same
+  username (see Latency).
 - **Capacity.** One browser slot on 512 MB (one session measured at 320 MB). Further logins wait
   in a FIFO queue (up to 5, for `QUEUE_WAIT_S` 30 s), then get `BUSY`. The slot is freed as soon
   as the documents are fetched; they stay in memory for `DOCUMENT_CACHE_S` (10 min).
