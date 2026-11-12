@@ -78,6 +78,17 @@ describe('createApi', () => {
     await expect(access.access('code')).resolves.toBeUndefined();
   });
 
+  it('accepts the 202 the server really sends: "Accepted" as plain text', async () => {
+    const api = createApi(
+      async () =>
+        new Response('Accepted', {
+          status: 202,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        }),
+    );
+    await expect(api.submitMfa('s1', { code: '123456' })).resolves.toBeUndefined();
+  });
+
   it('throws a typed ApiError from an ErrorBody', async () => {
     const api = createApi(async () =>
       jsonResponse(401, {

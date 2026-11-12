@@ -107,6 +107,8 @@ export function createApi(fetchFn: FetchFn = (input, init) => fetch(input, init)
       throw new ApiError('INTERNAL', 'Could not reach the server', true, 0);
     }
     if (!res.ok) throw await parseErrorResponse(res);
+    // Only a JSON body is a result. A bodiless 202 still has one: Koa sends "Accepted" as text.
+    if (!/\bjson\b/i.test(res.headers.get('content-type') ?? '')) return undefined as T;
     const text = await res.text();
     return (text ? JSON.parse(text) : undefined) as T;
   }
