@@ -42,6 +42,17 @@ jobs:
           RUN_BROWSER_TESTS: '1'
       - run: npm run test:e2e
 
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      # Production dependencies only; fails on high or critical advisories.
+      - run: npm audit --omit=dev --audit-level=high
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20

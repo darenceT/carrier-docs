@@ -5,6 +5,7 @@ import helmet from 'koa-helmet';
 import serve from 'koa-static';
 import { createMockPortalRouter } from '@carrier-docs/mock-portal';
 import { createApi, type ApiDeps } from './api/index.js';
+import { canaryRoute, type CanaryRouteOptions } from './canary/route.js';
 
 export interface AppOptions {
   /** Built React app to serve at /, if present. */
@@ -12,6 +13,8 @@ export interface AppOptions {
   /** Serve the mock carrier portal at /demo-portal (the Demo carrier's "carrier site"). */
   mockPortal?: boolean;
   /** Mounts the HTTP API under /api. Omitted in tests that only need health checks. */
+  /** POST /internal/canary for the scheduled workflow (token-protected). */
+  canary?: CanaryRouteOptions;
   api?: ApiDeps & {
     /** Keys for signing cookies (newest first, so keys can be rotated). */
     cookieKeys: string[];
@@ -45,6 +48,8 @@ export function createApp(options: AppOptions = {}): Koa {
     // Handles /api/* only; health checks and static files pass through without the access cookie.
     app.use(createApi(deps));
   }
+
+  if (options.canary) app.use(canaryRoute(options.canary));
 
   router.get('/healthz', (ctx) => {
     ctx.body = { ok: true };
