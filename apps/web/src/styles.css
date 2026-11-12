@@ -36,6 +36,18 @@ button {
 .note {
   color: #555;
 }
+/* "A new version is available": pinned to the top so an old tab can't miss it. */
+.new-version {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  background: #fff3c4;
+  color: #222;
+  text-align: center;
+}
 .headline {
   font-size: 1.4rem;
   font-weight: bold;

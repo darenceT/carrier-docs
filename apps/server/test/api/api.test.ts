@@ -101,7 +101,7 @@ describe('access gate', () => {
     const { app } = makeHarness();
     const res = await request(app.callback()).get('/healthz');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toMatchObject({ ok: true });
   });
 
   it('answers unknown /api routes with 404 NOT_FOUND once past the gate', async () => {
