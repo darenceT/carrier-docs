@@ -30,6 +30,8 @@ declare module 'koa-pino-logger' {
     quietReqLogger?: boolean;
     genReqId?: (req: IncomingMessage, res: ServerResponse) => string;
     customProps?: (req: IncomingMessage, res: ServerResponse) => Record<string, unknown>;
+    // pino-http serializers; `req`/`res` here are pino-http's serialized shapes.
+    serializers?: Record<string, (value: never) => unknown>;
   }
 
   export default function koaPinoLogger(options?: KoaPinoLoggerOptions): Middleware;

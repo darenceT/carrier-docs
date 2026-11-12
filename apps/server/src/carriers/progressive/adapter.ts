@@ -141,9 +141,20 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
 
     const field = await this.field(page, selectors.code, 'code field');
     await step('code field', () => this.pacing.type(field, code));
+    // The form may submit itself or move on as soon as the code is entered; a Verify click on a
+    // button that has just gone must not fail the login. Progressive's own status decides below.
     const verify = page.getByRole('button', { name: selectors.verify }).first();
-    if (await verify.isVisible().catch(() => false)) await this.pacing.click(verify);
-    else await field.press('Enter');
+    const moved = () =>
+      w.statuses.filter((st) => st === 'MFA_COMPLETED').length > completedBefore ||
+      w.otpChecks.length > checksBefore ||
+      this.onApp(page);
+    if (!moved()) {
+      if (await verify.isVisible().catch(() => false)) {
+        await this.pacing.click(verify).catch(() => undefined);
+      } else {
+        await field.press('Enter').catch(() => undefined);
+      }
+    }
 
     const result = await this.until(page, () => {
       if (w.statuses.filter((s) => s === 'MFA_COMPLETED').length > completedBefore) return 'ok';
