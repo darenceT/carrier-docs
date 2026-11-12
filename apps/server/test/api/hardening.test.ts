@@ -5,6 +5,7 @@ import { carrierRoutes } from '../../src/api/routes/carriers.js';
 import { documentRoutes } from '../../src/api/routes/documents.js';
 import { meRoutes } from '../../src/api/routes/me.js';
 import { sessionRoutes } from '../../src/api/routes/sessions.js';
+import { statusRoutes } from '../../src/api/routes/status.js';
 import { DEFAULT_HEARTBEAT_MS, DEFAULT_RATE_LIMIT } from '../../src/api/types.js';
 import { FakeSessionService } from './fake-session-service.js';
 import { makeHarness } from './helpers.js';
@@ -20,6 +21,9 @@ function gatedRoutes(): { method: string; path: string }[] {
     sessionRoutes({ sessions, limits: DEFAULT_RATE_LIMIT, heartbeatMs: DEFAULT_HEARTBEAT_MS }),
     documentRoutes({ sessions }),
     meRoutes({ sessions }),
+    statusRoutes({
+      status: () => ({ since: '', sessions: { live: 0, slotsInUse: 0, waiting: 0 }, carriers: {} }),
+    }),
   ] as unknown as Router[];
   return routers.flatMap((router) =>
     router.stack.flatMap((layer) =>
@@ -55,7 +59,11 @@ describe('security checklist', () => {
   it.each(routes)(
     '$method $path returns 401 without the access cookie',
     async ({ method, path }) => {
-      const { app, sessions } = makeHarness();
+      const { app, sessions } = makeHarness({
+        status: () => {
+          throw new Error('must not run');
+        },
+      });
       const verb = method.toLowerCase() as 'get' | 'post' | 'delete';
       const req = request(app.callback())[verb](path);
       const res = await (verb === 'post' ? req.send({}) : req);

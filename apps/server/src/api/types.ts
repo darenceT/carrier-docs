@@ -1,5 +1,6 @@
 import type { Router } from '@koa/router';
 import type { DefaultContext, DefaultState, ParameterizedContext } from 'koa';
+import type { StatusResponse } from '@carrier-docs/contracts';
 import type { Logger } from 'pino';
 import type { SessionService } from '../core/ports.js';
 
@@ -26,6 +27,8 @@ export interface ApiDeps {
   /** SSE heartbeat interval. Default 15 s. */
   heartbeatMs?: number;
   rateLimit?: RateLimitOptions;
+  /** Mounts GET /api/status when given. */
+  status?: () => StatusResponse;
 }
 
 export const DEFAULT_RATE_LIMIT: RateLimitOptions = {

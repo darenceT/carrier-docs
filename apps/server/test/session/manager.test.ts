@@ -10,6 +10,7 @@ import {
   type ContextLike,
   type SessionLimits,
 } from '../../src/session/manager.js';
+import { SessionMetrics } from '../../src/session/metrics.js';
 import { captureLogger } from '../browser/fakes.js';
 
 // ---------- fakes: a scripted carrier and a browser that only counts contexts ----------
@@ -143,12 +144,15 @@ let carrier: FakeCarrier;
 let browser: FakeBrowser;
 let store: MemorySessionStore;
 let manager: SessionManager<FakePage>;
+let metrics: SessionMetrics;
 
 function makeManager(limits: Partial<SessionLimits> = {}) {
   carrier = new FakeCarrier();
   browser = new FakeBrowser();
   store = new MemorySessionStore(clock);
+  metrics = new SessionMetrics();
   manager = new SessionManager<FakePage>({
+    metrics,
     adapters: [carrier],
     browserFor: () => browser,
     store,
@@ -605,5 +609,67 @@ describe('SessionManager: ownership, validation, forget', () => {
     expect(manager.stats()).toMatchObject({ live: 0, slotsInUse: 0 });
     await settle();
     expect(browser.open).toBe(0);
+  });
+});
+
+describe('SessionManager: metrics for /api/status', () => {
+  const demo = () => metrics.snapshot(manager.stats()).carriers.demo!;
+
+  it('records a full login once, excluding the time the user took to type the code', async () => {
+    const { sessionId } = await login('o1', 'alice');
+    await settle();
+    await vi.advanceTimersByTimeAsync(20_000); // reading the text message
+    await manager.submitMfa('o1', sessionId, CODE);
+    await settle();
+    await vi.advanceTimersByTimeAsync(LIMITS.documentCacheMs);
+    const d = demo();
+    expect(d.attempts).toBe(1);
+    expect(d.outcomes).toEqual({ done: 1 });
+    expect(d.timeToFirstDocument.fullLogin).toMatchObject({ count: 1 });
+    expect(d.timeToFirstDocument.fullLogin.p50).toBeLessThan(1_000);
+    expect(d.timeToFirstDocument.fastPath.count).toBe(0);
+    expect(d.timeToFirstDocument.notPrewarmed.count).toBe(1);
+  });
+
+  it('splits the fast path and pre-warmed logins', async () => {
+    await login('o1', 'nomfa');
+    await settle();
+    carrier.validSessions.add('nomfa');
+    await login('o1', 'nomfa'); // saved session accepted
+    await settle();
+    const { sessionId: pw } = await manager.prewarm('o2', 'demo');
+    await settle();
+    await login('o2', 'nomfa', { prewarmSessionId: pw }); // another owner: no saved session
+    await settle();
+    const t = demo().timeToFirstDocument;
+    expect(t.all.count).toBe(3);
+    expect(t.fastPath.count).toBe(1);
+    expect(t.fullLogin.count).toBe(2);
+    expect(t.prewarmed.count).toBe(1);
+    expect(t.notPrewarmed.count).toBe(1);
+  });
+
+  it('counts failures by code, the block rate, and never a pre-warm', async () => {
+    for (const user of ['wrong', 'blocked', 'nomfa', 'nomfa']) {
+      await login('o1', user);
+      await settle();
+    }
+    await manager.prewarm('o3', 'demo');
+    await vi.advanceTimersByTimeAsync(LIMITS.prewarmTimeoutMs);
+    const d = demo();
+    expect(d.attempts).toBe(4);
+    expect(d.outcomes).toEqual({ BAD_CREDENTIALS: 1, CARRIER_BLOCKED: 1, done: 2 });
+    expect(d.blockRate).toBe(0.25);
+    expect(d.timeToFirstDocument.all.count).toBe(2);
+  });
+
+  it('a third wrong code counts once, as MFA_INVALID', async () => {
+    const { sessionId } = await login('o1', 'alice');
+    await settle();
+    for (let i = 0; i < 3; i += 1) {
+      await manager.submitMfa('o1', sessionId, '000000');
+      await settle();
+    }
+    expect(demo().outcomes).toEqual({ MFA_INVALID: 1 });
   });
 });

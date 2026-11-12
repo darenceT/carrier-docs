@@ -21,12 +21,15 @@ declare module 'koa-ratelimit' {
 }
 
 declare module 'koa-pino-logger' {
+  import type { IncomingMessage, ServerResponse } from 'node:http';
   import type { Middleware } from 'koa';
   import type { Logger } from 'pino';
 
   interface KoaPinoLoggerOptions {
     logger?: Logger;
     quietReqLogger?: boolean;
+    genReqId?: (req: IncomingMessage, res: ServerResponse) => string;
+    customProps?: (req: IncomingMessage, res: ServerResponse) => Record<string, unknown>;
   }
 
   export default function koaPinoLogger(options?: KoaPinoLoggerOptions): Middleware;
