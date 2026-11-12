@@ -61,8 +61,10 @@ const schema = z.object({
   // Local runs and tests only ever load the mock portal; Render lists the real carriers.
   CANARY_CARRIERS: carrierList.default(['demo']),
   EGRESS_PROXY_URL: z.url().optional(),
-  // Skip pictures, fonts and third-party trackers on carrier pages (antibot/resources.ts).
-  RESOURCE_BLOCKING: bool.default(true),
+  // Skip pictures, fonts and third-party trackers on carrier pages (antibot/resources.ts). Off:
+  // measured on Progressive it saved nothing (policy list 4.5 s, link 2.9 s either way) and the
+  // card request took ~3 s longer. Kept as a switch for experiments.
+  RESOURCE_BLOCKING: bool.default(false),
   // 'poll' if SSE arrives in bursts through the hosting proxy (design D8).
   EVENTS_TRANSPORT: z.enum(['sse', 'poll']).default('sse'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),

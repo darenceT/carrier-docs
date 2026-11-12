@@ -88,7 +88,7 @@ export function createAntibot(config: AntibotConfig, options: AntibotOptions): A
         egress: isDemo ? createEgress(undefined) : egress,
         pacing: isDemo ? noPacing : lightPacing(),
         // The mock portal is tiny and local: nothing to gain.
-        blockResources: !isDemo && config.resourceBlocking !== false,
+        blockResources: !isDemo && config.resourceBlocking === true,
       };
     },
     async warmup(carrierIds) {

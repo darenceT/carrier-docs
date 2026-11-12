@@ -19,6 +19,7 @@ describe('loadConfig', () => {
     expect(c.mfaTimeoutMs).toBe(300_000);
     expect(c.sessionTtlMs).toBe(7 * 24 * 3600 * 1000);
     expect(c.demoCarrierEnabled).toBe(false);
+    expect(c.resourceBlocking).toBe(false);
     expect(c.browserStrategy.progressive).toBe('patched-headless');
   });
 
@@ -29,7 +30,9 @@ describe('loadConfig', () => {
       MAX_SESSIONS: '2',
       DEMO_CARRIER_ENABLED: 'true',
       CARRIER2_BROWSER: 'patched-headed',
+      RESOURCE_BLOCKING: 'true',
     });
+    expect(c.resourceBlocking).toBe(true);
     expect(c.port).toBe(10000);
     expect(c.maxSessions).toBe(2);
     expect(c.demoCarrierEnabled).toBe(true);
