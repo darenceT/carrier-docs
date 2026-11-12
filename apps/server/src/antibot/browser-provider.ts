@@ -60,9 +60,20 @@ interface LaunchOptions {
   executablePath: string | undefined;
 }
 
+/**
+ * By default the library closes the browser itself on SIGTERM, SIGINT and SIGHUP. On a deploy
+ * that killed every login in flight within milliseconds, before the server's own shutdown could
+ * let them finish (drain, then close the pool). The server owns shutdown: signals are left to it.
+ */
+export const SIGNALS_LEFT_TO_THE_SERVER = {
+  handleSIGTERM: false,
+  handleSIGINT: false,
+  handleSIGHUP: false,
+} as const;
+
 async function launchPatched(options: LaunchOptions): Promise<Browser> {
   const { chromium } = await import('patchright');
-  return chromium.launch(options);
+  return chromium.launch({ ...options, ...SIGNALS_LEFT_TO_THE_SERVER });
 }
 
 /**
@@ -76,7 +87,7 @@ async function launchStock(options: LaunchOptions): Promise<Browser> {
   } catch {
     throw new Error('stock strategies need the playwright package (a dev dependency)');
   }
-  const browser = await playwright.chromium.launch(options);
+  const browser = await playwright.chromium.launch({ ...options, ...SIGNALS_LEFT_TO_THE_SERVER });
   // playwright and patchright expose the same Browser API; the types differ only nominally.
   return browser as unknown as Browser;
 }
