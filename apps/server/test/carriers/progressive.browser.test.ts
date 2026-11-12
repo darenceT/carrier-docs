@@ -237,6 +237,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     let browser: TestBrowser;
     let adapter: ProgressiveAdapter;
     let makeAdapter: () => ProgressiveAdapter;
+    let sharedAdapter: ProgressiveAdapter;
     let context: BrowserContext;
     let page: Page;
 
@@ -259,6 +260,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
           },
         });
       adapter = makeAdapter();
+      sharedAdapter = adapter;
       const executablePath = process.env.BROWSER_EXECUTABLE_PATH;
       browser = await chromium.launch(executablePath ? { executablePath } : {});
     });
@@ -275,6 +277,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     });
 
     afterEach(async () => {
+      adapter = sharedAdapter;
       handshakeBody = SPIKE_HANDSHAKE;
       signed = true;
       autoSubmit = false;
@@ -309,6 +312,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
 
     it('names the refusal when a policy the app did not fetch is refused', async () => {
       appFetches = [['1111', 'WA-AA']];
+      // A fresh adapter: it clicks through from the account home, which lists both policies.
+      adapter = makeAdapter();
       await logIn();
       await adapter.listDocuments(page);
       await expect(adapter.fetchDocument(page, 'idcard-2')).rejects.toMatchObject({
@@ -320,6 +325,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     it('fetches a policy the app did not fetch with our own request, where accepted', async () => {
       appFetches = [['1111', 'WA-AA']];
       signed = false;
+      // A fresh adapter: it clicks through from the account home, which lists both policies.
+      adapter = makeAdapter();
       await logIn();
       await adapter.listDocuments(page);
       const file = await adapter.fetchDocument(page, 'idcard-2');
@@ -335,6 +342,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       handshakeBody = {
         account: { policies: [{ summary: { policyNumber: 1111, policyInfoKey: 'WA-AA' } }] },
       };
+      appFetches = [['1111', 'WA-AA']]; // a consistent account: one policy everywhere
       await logIn();
       const docs = await adapter.listDocuments(page);
       expect(docs.map((d) => d.policyNumberMasked)).toEqual(['••••1111']);
@@ -388,7 +396,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const file = await fresh.fetchDocument(p2, 'idcard-1');
       expect(file.mimeType).toBe('application/pdf');
       await ctx2.close();
-    });
+    }, 20_000); // two full logins
 
     it('asks again after a wrong code', async () => {
       await adapter.openLogin(page);

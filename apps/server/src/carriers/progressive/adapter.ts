@@ -378,10 +378,23 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (seen && seen.length > 0) return seen;
     try {
       await this.documentTemplate(page);
-      await page.waitForTimeout(300); // the page may ask for several cards in a row
+      // The first document waits for the app's first card anyway: until it arrives, a
+      // handshake (the full policy list) may still come, and is preferred.
+      await this.until(
+        page,
+        () =>
+          w.handshakePolicies ??
+          (w.appAsked.some((p) => w.appCards.has(p.number)) ? true : undefined),
+        10_000,
+      );
       const fromApp = w.appAsked;
       if (w.handshakePolicies) return w.handshakePolicies; // a later handshake listed them
-      if (fromApp.length > 0) return [...fromApp];
+      // Sorted: the app asks for cards concurrently, so arrival order varies between logins.
+      if (fromApp.length > 0) {
+        return [...fromApp].sort((a, b) =>
+          a.number.localeCompare(b.number, undefined, { numeric: true }),
+        );
+      }
     } catch (err) {
       if (!(err instanceof AppError) || err.code !== 'CARRIER_PAGE_CHANGED') throw err;
     }
