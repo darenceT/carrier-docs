@@ -131,10 +131,11 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 Run with `live-login` (`apps/server/src/scripts/live-login.ts`) in the Render Shell, patched
 headless, Render's own IP. Times exclude the person typing credentials and codes.
 
-| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                |
-| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29) |
-| —          | Lemonade    |            |                      |          |               | Not run yet                                                                                                                           |
+| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                            |
+| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29)             |
+| 2026-11-12 | Progressive | 4498 ms    | 875 ms               | 916 ms   | 1774 ms       | **OK.** Account page reached (+15095 ms, mostly script waits, see below). Repeat run with saved cookies: no login needed, account page in 6594 ms |
+| —          | Lemonade    |            |                      |          |               | Not run yet                                                                                                                                       |
 
 Earlier attempts stopped before anything was typed (field lookup, then an invisible prompt; fixed
 in #21, #26, #27), so none counted as a login attempt.
@@ -147,8 +148,17 @@ Findings (Progressive):
 - **Latency:** about 7.8 s of machine time from opening the login page to the code being accepted,
   of which 4.8 s is the login page itself (redirects through PingFederate). Pre-warming the page
   while the user types hides most of that.
-- **Still to confirm:** remember-device, the account API answering, and the repeat-run check (next
-  run, after #29).
+- **Full login works (2026-11-12, after #29 and #31):** password, SMS code and the remember step,
+  through to `policyservicing.apps.progressive.com/app/account-home`.
+- **Session reuse works:** a fresh browser with only the saved cookies reached the account with no
+  password and no SMS (6.6 s, going through the login URL and PingFederate's redirects). The
+  adapter can skip that chain by opening the account app and calling the documents API directly.
+- **"Logged in" step (15.1 s) is mostly the script:** it waits up to 10 s for the remember control
+  and tries a plain tick (3 s timeout) before the label click that works. The adapter clicks the
+  label directly; Progressive's own share is estimated at 1-2 s but wasn't measured separately.
+- **Remember-device unconfirmed:** no `pgrDevice_*` cookie was set this run, although one exists in
+  the user's own browser. Either it's set differently, or the label click didn't choose "remember".
+  The next fresh login settles it: skipping the SMS step means the device was remembered.
 
 ### Portal mapping
 
