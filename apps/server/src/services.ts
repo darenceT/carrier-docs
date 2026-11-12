@@ -6,8 +6,8 @@ import { runCanary, type CanaryReport } from './canary/canary.js';
 import { canaryTargets } from './canary/targets.js';
 import { createAntibot, createFingerprint, refreshFingerprint } from './antibot/index.js';
 import { DemoAdapter } from './carriers/demo/adapter.js';
-import { LemonadeAdapter } from './carriers/lemonade/adapter.js';
-import { ProgressiveAdapter } from './carriers/progressive/adapter.js';
+import { LEMONADE_CARRIER, LemonadeAdapter } from './carriers/lemonade/adapter.js';
+import { PROGRESSIVE_CARRIER, ProgressiveAdapter } from './carriers/progressive/adapter.js';
 import type { CarrierAdapter } from './core/ports.js';
 import { systemClock } from './infra/clock.js';
 import type { Config } from './infra/config.js';
@@ -27,6 +27,8 @@ export interface Services {
   sessions: SessionManager<Page>;
   /** GET /api/status: outcome counts, block rate, time to first document. */
   status(): StatusResponse;
+  /** Launch the real carriers' browser at boot (~1.4 s the first login would otherwise pay). */
+  warmup(): Promise<void>;
   /** Graceful shutdown, step one: see SessionManager.drain. */
   drain(timeoutMs: number): Promise<void>;
   /** Loads each configured login page through the anti-bot layer; never logs in. */
@@ -60,6 +62,7 @@ export function createServices(config: Config, logger: Logger): Services {
     new LemonadeAdapter({
       pacing: antibot.forCarrier('lemonade').pacing,
       stepTimeoutMs: PAGE_ACTION_TIMEOUT_MS,
+      log: (msg, fields) => carrierLog.info({ carrierId: 'lemonade', ...fields }, msg),
     }),
   ];
   if (config.demoCarrierEnabled) {
@@ -117,6 +120,7 @@ export function createServices(config: Config, logger: Logger): Services {
     cipher,
     sessions,
     status: () => metrics.snapshot(sessions.stats()),
+    warmup: () => antibot.warmup([PROGRESSIVE_CARRIER.id, LEMONADE_CARRIER.id]),
     drain: (timeoutMs) => sessions.drain(timeoutMs),
     runCanary: () =>
       runCanary(targets, {

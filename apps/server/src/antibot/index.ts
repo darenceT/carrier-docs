@@ -25,6 +25,8 @@ export interface CarrierAntibot {
 
 export interface Antibot {
   forCarrier(carrierId: string): CarrierAntibot;
+  /** Launch the browsers these carriers use now, so the first login doesn't pay the cold start. */
+  warmup(carrierIds: readonly string[]): Promise<void>;
   /** Close every browser this layer launched. */
   close(): Promise<void>;
 }
@@ -83,6 +85,10 @@ export function createAntibot(config: AntibotConfig, options: AntibotOptions): A
         egress: isDemo ? createEgress(undefined) : egress,
         pacing: isDemo ? noPacing : lightPacing(),
       };
+    },
+    async warmup(carrierIds) {
+      const unique = new Set(carrierIds.map((id) => poolFor(strategyFor(config, id))));
+      await Promise.allSettled([...unique].map((p) => p.warmup()));
     },
     async close() {
       await Promise.allSettled([...pools.values()].map((p) => p.close()));
