@@ -1,11 +1,19 @@
 services:
   app:
     build: .
+    image: carrier-docs:local
     ports:
       - '3000:3000'
     env_file: .env
     environment:
+      # Plain HTTP on localhost: no Secure cookies or HTTPS upgrade (those are for Render).
+      NODE_ENV: development
       PORT: '3000'
       DATA_DIR: /var/data
     volumes:
-      - ./data:/var/data
+      # A named volume, owned by the image's node user (a ./data bind mount would be root-owned
+      # on Linux and not writable). `docker compose down -v` deletes saved sessions.
+      - data:/var/data
+
+volumes:
+  data:
