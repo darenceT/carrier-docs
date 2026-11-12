@@ -113,6 +113,8 @@ const SPIKE_HANDSHAKE = {
  * the app's request with another mimeType is refused (401). Off: the copy is accepted.
  */
 let signed = true;
+/** The app sends the account home to its session-timeout page. */
+let timesOut = false;
 /** After the password, the flow first asks how to send the code. */
 let askChannel = false;
 /** The login page submits the code itself at six digits. */
@@ -194,7 +196,14 @@ function createPortal(): http.Server {
           return json(200, { status: 'RESUME' }, { 'set-cookie': 'pf=ok; Path=/' });
         }
       }
+      if (url.pathname === '/app/session-timeout') {
+        return html('<!doctype html><h1>Your session has timed out</h1>');
+      }
       if (url.pathname.startsWith('/app/')) {
+        if (timesOut && url.pathname === '/app/account-home') {
+          res.writeHead(302, { location: '/app/session-timeout' });
+          return res.end();
+        }
         if (!loggedIn(req)) {
           res.writeHead(302, { location: '/access/login' });
           return res.end();
@@ -286,6 +295,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       signed = true;
       autoSubmit = false;
       askChannel = false;
+      timesOut = false;
       appFetches = [
         ['1111', 'WA-AA'],
         ['2222', 'OR-AA'],
@@ -301,17 +311,23 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
     };
 
-    it('logs in, lists ID cards, and serves the app’s own card images as one PDF', async () => {
+    it('lists per policy the first image, then the whole card as a PDF', async () => {
       await logIn();
       const docs = await adapter.listDocuments(page);
-      expect(docs.map((d) => [d.id, d.kind, d.policyNumberMasked])).toEqual([
-        ['idcard-1', 'id_card', '••••1111'],
-        ['idcard-2', 'id_card', '••••2222'],
+      expect(docs.map((d) => [d.id, d.mimeType, d.policyNumberMasked])).toEqual([
+        ['idcard-1', 'image/png', '••••1111'],
+        ['idcard-1-pdf', 'application/pdf', '••••1111'],
+        ['idcard-2', 'image/png', '••••2222'],
+        ['idcard-2-pdf', 'application/pdf', '••••2222'],
       ]);
-      const file = await adapter.fetchDocument(page, 'idcard-1');
-      expect(file.mimeType).toBe('application/pdf');
-      const pdf = await PDFDocument.load(file.body as Uint8Array);
-      expect(pdf.getPageCount()).toBe(2); // one page per image the app received
+      // The headline document: the app's first image as it came, no conversion.
+      const first = await adapter.fetchDocument(page, 'idcard-1');
+      expect(first.mimeType).toBe('image/png');
+      expect(Buffer.from(first.body as Uint8Array).toString('base64')).toBe(PNG_B64);
+      // Lazily, the whole card: one page per image the app received.
+      const whole = await adapter.fetchDocument(page, 'idcard-1-pdf');
+      expect(whole.mimeType).toBe('application/pdf');
+      expect((await PDFDocument.load(whole.body as Uint8Array)).getPageCount()).toBe(2);
     });
 
     it('names the refusal when a policy the app did not fetch is refused', async () => {
@@ -349,8 +365,9 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       appFetches = [['1111', 'WA-AA']]; // a consistent account: one policy everywhere
       await logIn();
       const docs = await adapter.listDocuments(page);
-      expect(docs.map((d) => d.policyNumberMasked)).toEqual(['••••1111']);
-      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(docs.map((d) => d.id)).toEqual(['idcard-1', 'idcard-1-pdf']);
+      expect(docs[0]?.policyNumberMasked).toBe('••••1111');
+      const file = await adapter.fetchDocument(page, 'idcard-1-pdf');
       expect(file.mimeType).toBe('application/pdf');
     });
 
@@ -360,9 +377,11 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const docs = await adapter.listDocuments(page);
       expect(docs.map((d) => [d.id, d.policyNumberMasked])).toEqual([
         ['idcard-1', '••••1111'],
+        ['idcard-1-pdf', '••••1111'],
         ['idcard-2', '••••2222'],
+        ['idcard-2-pdf', '••••2222'],
       ]);
-      const file = await adapter.fetchDocument(page, 'idcard-1');
+      const file = await adapter.fetchDocument(page, 'idcard-1-pdf');
       expect(
         Buffer.from(file.body as Uint8Array)
           .subarray(0, 5)
@@ -390,6 +409,16 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
     });
 
+    it('stops at once on the app’s session-timeout page instead of waiting out timeouts', async () => {
+      await adapter.openLogin(page);
+      await adapter.login(page, { username: USER, password: PASS });
+      timesOut = true;
+      await adapter.submitMfa(page, CODE).catch(() => undefined);
+      const started = Date.now();
+      await expect(adapter.listDocuments(page)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
+      expect(Date.now() - started).toBeLessThan(3_000); // was 3 x the step timeout
+    });
+
     it('asks again after a wrong code', async () => {
       await adapter.openLogin(page);
       await adapter.login(page, { username: USER, password: PASS });
@@ -415,8 +444,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       await fresh.addCookies(saved);
       const p2 = await fresh.newPage();
       expect(await adapter.isSessionValid(p2)).toBe(true);
-      expect(await adapter.listDocuments(p2)).toHaveLength(2);
-      const file = await adapter.fetchDocument(p2, 'idcard-1');
+      expect(await adapter.listDocuments(p2)).toHaveLength(4);
+      const file = await adapter.fetchDocument(p2, 'idcard-1-pdf');
       expect(
         Buffer.from(file.body as Uint8Array)
           .subarray(0, 5)

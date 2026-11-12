@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { idCardFromDocuments } from '../../src/carriers/progressive/document.js';
+import { firstCardFile, idCardFromDocuments } from '../../src/carriers/progressive/document.js';
 import { findPolicies, policyFromDocumentUrl } from '../../src/carriers/progressive/policies.js';
 import { describeShape } from '../../src/carriers/shared.js';
 
@@ -88,6 +88,29 @@ describe('idCardFromDocuments', () => {
       await expect(idCardFromDocuments(bad)).rejects.toMatchObject({
         code: 'CARRIER_PAGE_CHANGED',
       });
+    }
+  });
+});
+
+describe('firstCardFile', () => {
+  const PNG_1x1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const b64 = (s: string) => Buffer.from(s, 'latin1').toString('base64');
+
+  it('returns the first file as it came, typed by its bytes', () => {
+    const png = firstCardFile([PNG_1x1, b64('%PDF-1.4')]);
+    expect(png.mimeType).toBe('image/png');
+    expect(png.extension).toBe('png');
+    expect(Buffer.from(png.bytes).toString('base64')).toBe(PNG_1x1);
+    expect(firstCardFile([b64('%PDF-1.4\n')]).mimeType).toBe('application/pdf');
+    expect(firstCardFile([b64('\xff\xd8\xff\xe0jpeg')]).mimeType).toBe('image/jpeg');
+  });
+
+  it('reports a missing or unknown file as CARRIER_PAGE_CHANGED', () => {
+    for (const bad of [undefined, [], [7], [b64('junk')]]) {
+      expect(() => firstCardFile(bad)).toThrow(
+        expect.objectContaining({ code: 'CARRIER_PAGE_CHANGED' }),
+      );
     }
   });
 });

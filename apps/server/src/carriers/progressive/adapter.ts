@@ -23,7 +23,7 @@ import {
   sortDocuments,
   step,
 } from '../shared.js';
-import { idCardFromDocuments } from './document.js';
+import { firstCardFile, idCardFromDocuments } from './document.js';
 import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
 import { PROGRESSIVE_URLS, blockRules, selectors, type ProgressiveUrls } from './selectors.js';
 
@@ -51,6 +51,9 @@ const timer = () => {
   const start = Date.now();
   return () => Date.now() - start;
 };
+
+/** The suffix of the whole-card PDF's document ID ("idcard-1-pdf"). */
+const ALL_PAGES = '-pdf';
 
 const MFA_HINT = 'Progressive texted a code to the phone on your account.';
 
@@ -294,38 +297,62 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const policies = await this.accountPolicies(page, w);
     this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
-    const docs = policies.map((p, i): DocumentMeta => {
+    // Per policy: the card's first image, served as it came (the headline document), then the
+    // whole card as one PDF, converted lazily while the rest is prefetched.
+    const docs = policies.flatMap((p, i): DocumentMeta[] => {
       const id = `idcard-${i + 1}`;
       map.set(id, p);
-      const doc: DocumentMeta = {
-        id,
-        title: 'ID card',
-        kind: 'id_card',
-        mimeType: 'application/pdf',
-      };
       const masked = maskPolicyNumber(p.number);
-      if (masked) doc.policyNumberMasked = masked;
-      return doc;
+      const extra = masked ? { policyNumberMasked: masked } : {};
+      return [
+        { id, title: 'ID card', kind: 'id_card', mimeType: 'image/png', ...extra },
+        {
+          id: `${id}${ALL_PAGES}`,
+          title: 'ID card (all pages, PDF)',
+          kind: 'id_card',
+          mimeType: 'application/pdf',
+          ...extra,
+        },
+      ];
     });
     this.policies.set(page, map);
     return sortDocuments(docs);
   }
 
   async fetchDocument(page: Page, documentId: string): Promise<DocumentContent> {
-    if (!this.policies.get(page)?.has(documentId)) await this.listDocuments(page);
-    const policy = this.policies.get(page)?.get(documentId);
+    const allPages = documentId.endsWith(ALL_PAGES);
+    const cardId = allPages ? documentId.slice(0, -ALL_PAGES.length) : documentId;
+    if (!this.policies.get(page)?.has(cardId)) await this.listDocuments(page);
+    const policy = this.policies.get(page)?.get(cardId);
     if (!policy) throw new AppError('NOT_FOUND');
+    const files = await this.cardFiles(page, policy);
+
+    if (!allPages) {
+      const first = firstCardFile(files);
+      return {
+        mimeType: first.mimeType,
+        filename: `progressive-${cardId}.${first.extension}`,
+        body: first.bytes,
+      };
+    }
+    const c = timer();
+    const bytes = await idCardFromDocuments(files);
+    this.log('progressive id card converted', {
+      convertMs: c(),
+      kb: Math.round(bytes.length / 1024),
+    });
+    return { mimeType: 'application/pdf', filename: `progressive-${cardId}.pdf`, body: bytes };
+  }
+
+  /**
+   * The ID card's files (base64, as Progressive returns them) for a policy. First the card the
+   * app itself fetched (opening the ID cards page makes it ask): proven to work on the real site,
+   * and already here. Otherwise our own request, built from the app's.
+   */
+  private async cardFiles(page: Page, policy: Policy): Promise<unknown> {
     const w = this.watch(page);
     const t = timer();
     const template = await this.documentTemplate(page);
-    const done = (bytes: Uint8Array): DocumentContent => ({
-      mimeType: 'application/pdf',
-      filename: `progressive-${documentId}.pdf`,
-      body: bytes,
-    });
-
-    // 1. The card the app itself just fetched for this policy (opening the ID cards page makes it
-    //    ask). Proven to work on the real site, and already here: no request of ours at all.
     const ownFor = () => w.appCards.get(policy.number);
     if (w.appAsked.some((p) => p.number === policy.number)) {
       await this.until(page, () => ownFor(), 10_000);
@@ -337,15 +364,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       ms: t(),
     });
     if (own && own.status >= 200 && own.status < 300) {
-      const c = timer();
-      const bytes = await idCardFromDocuments(
-        (own.json as { documents?: unknown } | undefined)?.documents,
-      );
-      this.log('progressive id card converted', {
-        convertMs: c(),
-        kb: Math.round(bytes.length / 1024),
-      });
-      return done(bytes);
+      return (own.json as { documents?: unknown } | undefined)?.documents;
     }
 
     // 2. A policy the app didn't fetch: our own request, built from the app's.
@@ -364,8 +383,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
         `document ${res.status}; app's own ${own ? own.status : 'none'}`,
       );
     }
-    return done(await idCardFromDocuments((res.json as { documents?: unknown } | null)?.documents));
+    return (res.json as { documents?: unknown } | null)?.documents;
   }
+
   /**
    * The account's policies: from the handshake the app makes on load. If it lists none we can
    * read, the app's own ID-card request names a policy too, so use that (one ID card rather than
@@ -564,6 +584,14 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
 
   // ---------- helpers ----------
 
+  private onSessionTimeout(page: Page): boolean {
+    try {
+      return selectors.sessionTimeoutPath.test(new URL(page.url()).pathname);
+    } catch {
+      return false;
+    }
+  }
+
   private onApp(page: Page): boolean {
     try {
       const u = new URL(page.url());
@@ -576,7 +604,10 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     }
   }
 
-  /** Polls `check` until it returns a value; null on timeout. Throws on a block page. */
+  /**
+   * Polls `check` until it returns a value; null on timeout. Stops at once on Progressive's
+   * session-timeout page: nothing we wait for comes after it (it cost 90 s of timeouts once).
+   */
   private async until<T>(
     page: Page,
     check: () => T | undefined | Promise<T | undefined>,
@@ -584,6 +615,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   ): Promise<T | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (this.onSessionTimeout(page)) {
+        throw new AppError('SESSION_EXPIRED', 'progressive session-timeout page');
+      }
       const v = await check();
       if (v !== undefined) return v;
       await page.waitForTimeout(200);

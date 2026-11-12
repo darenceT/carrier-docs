@@ -38,3 +38,25 @@ export async function idCardFromDocuments(documents: unknown): Promise<Uint8Arra
     throw new AppError('CARRIER_PAGE_CHANGED', 'document is not a PDF or image');
   return out.save();
 }
+
+export interface CardFile {
+  mimeType: 'application/pdf' | 'image/png' | 'image/jpeg';
+  extension: 'pdf' | 'png' | 'jpg';
+  bytes: Uint8Array;
+}
+
+/**
+ * The first file of the ID card as it came (no conversion): the image the app shows first, or a
+ * PDF. Served at once as the headline document; the full card is idCardFromDocuments, lazily.
+ */
+export function firstCardFile(documents: unknown): CardFile {
+  const first = (Array.isArray(documents) ? documents : []).find(
+    (d): d is string => typeof d === 'string' && d.length > 0,
+  );
+  if (!first) throw new AppError('CARRIER_PAGE_CHANGED', 'document shape');
+  const bytes = new Uint8Array(Buffer.from(first, 'base64'));
+  if (startsWith(bytes, PDF)) return { mimeType: 'application/pdf', extension: 'pdf', bytes };
+  if (startsWith(bytes, PNG)) return { mimeType: 'image/png', extension: 'png', bytes };
+  if (startsWith(bytes, JPEG)) return { mimeType: 'image/jpeg', extension: 'jpg', bytes };
+  throw new AppError('CARRIER_PAGE_CHANGED', 'document is not a PDF or image');
+}
