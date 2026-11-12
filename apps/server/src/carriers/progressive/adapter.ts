@@ -90,6 +90,8 @@ class Watch {
   /** The policies the app has asked for an ID card for, in order. */
   appAsked: Policy[] = [];
   appCards = new Map<string, { status: number; json?: unknown }>();
+  /** Resolves when no handshake answer is being read. */
+  reading: Promise<void> = Promise.resolve();
 }
 
 const KEEP_HEADER = /^(authorization|accept|content-type|x-[a-z0-9-]+)$/i;
@@ -311,6 +313,14 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     // Each image is its own document, served as it came: no conversion. The list waits for the
     // cards so it knows how many there are; the first document needs the first card anyway.
     await cardsPage;
+    // The page asks for the cards one after another: give it a moment to ask for every policy's,
+    // or a card still on its way would be listed as a single document. No wait once all are asked.
+    await this.until(
+      page,
+      () =>
+        policies.every((p) => w.appAsked.some((a) => a.number === p.number)) ? true : undefined,
+      500,
+    );
     const docs: DocumentMeta[] = [];
     for (const [i, p] of policies.entries()) {
       const id = `idcard-${i + 1}`;
@@ -552,7 +562,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       return;
     }
     if (url.startsWith(this.urls.api) && new URL(url).pathname.endsWith('/handshake') && res.ok()) {
-      const body: unknown = await res.json().catch(() => 'not JSON');
+      // Remembered while it runs: a click that navigates must not cut this read short.
+      const read = res.json().catch(() => 'not JSON' as unknown);
+      const done = read.then(() => undefined);
+      w.reading = w.reading.then(() => done);
+      const body: unknown = await read;
       const found = findPolicies(body);
       if (found.length > 0) w.handshakePolicies ??= found;
       else w.handshakeShape ??= describeShape(body);
@@ -595,6 +609,14 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       .or(page.getByRole('button', { name: selectors.idCards }))
       .first();
     const t = timer();
+    // When the link shows, a handshake answer may be arriving at the same moment (the app renders
+    // its navigation on it). Finish reading it before the click: a navigation can discard the
+    // body, and with it the account's full policy list. Not waited for if it hasn't answered yet.
+    await Promise.race([
+      link.waitFor({ state: 'visible', timeout: this.timeout }).catch(() => undefined),
+      this.until(page, () => (w.template ? true : undefined)),
+    ]);
+    await w.reading;
     const clicked = await this.clickUnless(
       page,
       link,

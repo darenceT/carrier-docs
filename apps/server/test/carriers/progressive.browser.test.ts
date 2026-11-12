@@ -78,11 +78,16 @@ document.getElementById('rd').onchange = async () => {
 };
 </script></body></html>`;
 
+const ID_CARDS_LINK = '<a href="/app/id-cards">ID Cards</a>';
+// Like the real app, the navigation renders once the handshake has answered (on the real site
+// the "ID cards" link appeared ~3 s after it), so a click can't cancel the handshake. With
+// __EARLY__ the link is there from the start, for the test of overlapping the two.
 const APP_HOME = `<!doctype html><html><body><h1>Account</h1>
-<a href="/app/id-cards">ID Cards</a>
+<nav id="nav">__EARLY__</nav>
 <script>
 const token = '${TOKEN}'; // in memory only, like the real app
-fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } });
+fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } })
+  .finally(() => { nav.innerHTML = '${ID_CARDS_LINK}'; });
 </script></body></html>`;
 
 /** The ID cards page: the app fetches a card (as images) for each policy it shows. */
@@ -122,6 +127,8 @@ let autoSubmit = false;
 let handshakeBody: unknown = SPIKE_HANDSHAKE;
 /** How long the handshake takes to answer. */
 let handshakeDelayMs = 0;
+/** The "ID Cards" link is on the account home before the handshake answers. */
+let earlyLink = false;
 /** What reached the API, in order: 'handshake asked', 'handshake answered', 'card asked'. */
 let apiEvents: string[] = [];
 
@@ -211,7 +218,11 @@ function createPortal(): http.Server {
           res.writeHead(302, { location: '/access/login' });
           return res.end();
         }
-        return html(url.pathname === '/app/id-cards' ? idCardsPage(appFetches) : APP_HOME);
+        return html(
+          url.pathname === '/app/id-cards'
+            ? idCardsPage(appFetches)
+            : APP_HOME.replace('__EARLY__', earlyLink ? ID_CARDS_LINK : ''),
+        );
       }
       if (url.pathname.startsWith('/policypro/')) {
         if (req.method === 'OPTIONS') {
@@ -300,6 +311,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       adapter = sharedAdapter;
       handshakeBody = SPIKE_HANDSHAKE;
       handshakeDelayMs = 0;
+      earlyLink = false;
       apiEvents = [];
       signed = true;
       autoSubmit = false;
@@ -341,6 +353,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
 
     it('opens the ID cards page while the handshake is still coming, not after it', async () => {
       handshakeDelayMs = 1500;
+      earlyLink = true;
       await logIn();
       const started = Date.now();
       const docs = await adapter.listDocuments(page);
