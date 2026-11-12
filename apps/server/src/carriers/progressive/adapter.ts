@@ -42,8 +42,6 @@ export interface ProgressiveAdapterOptions {
   stepTimeoutMs?: number;
   /** Where sub-step timings go (timings and outcomes only, never values). */
   log?: StepLog;
-  /** The ID cards page's path, if known; otherwise learned from the first click. */
-  idCardsPath?: string;
 }
 
 type ClickResult = 'clicked' | 'not needed' | 'failed';
@@ -100,8 +98,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private readonly pacing: Pacing;
   private readonly timeout: number;
   private readonly log: StepLog;
-  /** The ID cards page's path, from options or learned from the first click (see goToIdCards). */
-  private idCardsPath: string | undefined;
   private readonly detector = new BlockDetector(blockRules);
   private readonly watches = new WeakMap<Page, Watch>();
   /** Document ID -> the policy it belongs to, per page. */
@@ -109,7 +105,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
 
   constructor(options: ProgressiveAdapterOptions) {
     this.log = options.log ?? (() => undefined);
-    this.idCardsPath = options.idCardsPath;
     this.urls = { ...PROGRESSIVE_URLS, ...options.urls };
     this.pacing = options.pacing;
     this.timeout = options.stepTimeoutMs ?? 30_000;
@@ -296,7 +291,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       throw new AppError('SESSION_EXPIRED', 'not logged in');
     }
     const t = timer();
-    await this.goToIdCards(page, w);
     const policies = await this.accountPolicies(page, w);
     this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
@@ -539,18 +533,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     }
   }
 
-  /**
-   * Once the ID cards page's path is known, open it straight away instead of rendering the
-   * account home and clicking through (that cost ~7 s on the real site). The app boots on that
-   * page and asks for the cards itself. A failed navigation is ignored: the click path remains.
-   */
-  private async goToIdCards(page: Page, w: Watch): Promise<void> {
-    if (!this.idCardsPath || w.template || !this.onApp(page)) return;
-    if (new URL(page.url()).pathname === this.idCardsPath) return;
-    const target = new URL(this.idCardsPath, this.urls.appOrigin).href;
-    await page.goto(target, { waitUntil: 'commit', timeout: this.timeout }).catch(() => undefined);
-  }
-
   /** The app's own ID-card request. If it hasn't made one yet, open the ID cards page so it does. */
   private async documentTemplate(page: Page): Promise<Template> {
     const w = this.watch(page);
@@ -560,7 +542,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       .or(page.getByRole('button', { name: selectors.idCards }))
       .first();
     const t = timer();
-    const before = new URL(page.url()).pathname;
     const clicked = await this.clickUnless(
       page,
       link,
@@ -569,16 +550,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     );
     const clickMs = t();
     const template = await this.until(page, () => w.template);
-    const after = new URL(page.url()).pathname;
-    // Learn where the ID cards page is, so later logins go straight there (see goToIdCards).
-    if (template && this.onApp(page) && after !== before) this.idCardsPath ??= after;
     this.log('progressive id cards page', {
       clicked,
       clickMs,
       requestMs: t(),
       found: !!template,
-      // Digits masked: a path could in principle carry an ID.
-      path: after.replace(/[0-9]/g, '#'),
     });
     if (!template && clicked === 'failed')
       throw new AppError('CARRIER_PAGE_CHANGED', 'ID cards link');
