@@ -10,6 +10,7 @@
  *   POST   /api/sessions/prewarm                      PrewarmRequest -> 202 SessionCreated
  *   POST   /api/sessions                              StartSessionRequest -> 202 SessionCreated
  *   GET    /api/sessions/:sessionId/events            -> text/event-stream of SessionEvent
+ *   GET    /api/sessions/:sessionId/snapshot          -> SessionSnapshot (polling fallback)
  *   POST   /api/sessions/:sessionId/mfa               MfaRequest -> 202
  *   GET    /api/sessions/:sessionId/documents/:docId  -> the document bytes (application/pdf)
  *   DELETE /api/me                                    -> ForgetResponse ("Forget me")
@@ -77,8 +78,13 @@ export interface CarrierInfo {
 
 export type LoginField = 'username' | 'password' | 'email';
 
+/** How the UI should follow a session: the SSE stream, or polling the snapshot every 250 ms. */
+export type EventsTransport = 'sse' | 'poll';
+
 export interface CarriersResponse {
   carriers: CarrierInfo[];
+  /** Set by the server (EVENTS_TRANSPORT); the UI uses SSE when it is absent. */
+  eventsTransport?: EventsTransport;
 }
 
 /** Sent when the user picks a carrier, so the login page starts loading while they type. */
@@ -203,4 +209,13 @@ export interface StatusResponse {
   since: string;
   sessions: { live: number; slotsInUse: number; waiting: number };
   carriers: Record<string, CarrierStatus>;
+}
+
+/**
+ * GET /api/sessions/:id/snapshot: the events a newly connected SSE stream would get first (the
+ * current status, then whatever is still relevant: the open MFA prompt, the document list, the
+ * ready document, done or failed). The polling fallback asks for it every 250 ms.
+ */
+export interface SessionSnapshot {
+  events: SessionEvent[];
 }

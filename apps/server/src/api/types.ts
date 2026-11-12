@@ -1,6 +1,6 @@
 import type { Router } from '@koa/router';
 import type { DefaultContext, DefaultState, ParameterizedContext } from 'koa';
-import type { StatusResponse } from '@carrier-docs/contracts';
+import type { EventsTransport, StatusResponse } from '@carrier-docs/contracts';
 import type { Logger } from 'pino';
 import type { SessionService } from '../core/ports.js';
 
@@ -29,6 +29,8 @@ export interface ApiDeps {
   rateLimit?: RateLimitOptions;
   /** Mounts GET /api/status when given. */
   status?: () => StatusResponse;
+  /** Advertised in GET /api/carriers; the UI follows sessions this way. Default SSE. */
+  eventsTransport?: EventsTransport;
 }
 
 export const DEFAULT_RATE_LIMIT: RateLimitOptions = {

@@ -45,6 +45,8 @@ interface FakeSession {
   timings: StepTiming[];
   attemptsLeft: number;
   emit?: (event: SessionEvent) => void;
+  /** Polling mode (`?transport=poll`): the latest event of each type, as the snapshot. */
+  latest?: Map<string, SessionEvent>;
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -186,6 +188,21 @@ export function createFakeDeps(): Deps {
       if (!s) return error(404, 'NOT_FOUND', 'No such session', false);
       void runMfa(s, body.code ?? '');
       return json(202);
+    }
+    const snapshot = /^\/api\/sessions\/([^/]+)\/snapshot$/.exec(path);
+    if (method === 'GET' && snapshot) {
+      const s = sessions.get(decodeURIComponent(snapshot[1]!));
+      if (!s) return error(404, 'NOT_FOUND', 'No such session', false);
+      if (!s.latest) {
+        const latest = new Map<string, SessionEvent>();
+        s.latest = latest;
+        s.emit = (event) => {
+          if (event.type === 'documents_listed') latest.delete('mfa_required');
+          latest.set(event.type, event);
+        };
+        void runLogin(s);
+      }
+      return json(200, { events: [...s.latest.values()] });
     }
     if (method === 'DELETE' && path === '/api/me') {
       const deleted = sessions.size;

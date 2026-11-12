@@ -36,6 +36,9 @@ services:
       # progressive,lemonade in the dashboard; demo only checks the local mock portal.
       - key: CANARY_CARRIERS
         value: demo
+      # Switch to poll if SSE events arrive in bursts through Render's proxy.
+      - key: EVENTS_TRANSPORT
+        value: sse
       - key: LOG_LEVEL
         value: info
       # Secrets: Render prompts for these in the dashboard; they never live in the repo.

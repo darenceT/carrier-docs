@@ -13,8 +13,8 @@ const ACCESS_CODE = 'e2e-access-code'; // set in playwright.config.ts
 const MFA_CODE = '123456'; // the mock portal's code; only unlocks fixture data
 const PASSWORD = 'demo-password';
 
-async function enter(page: Page): Promise<void> {
-  await page.goto('/');
+async function enter(page: Page, path = '/'): Promise<void> {
+  await page.goto(path);
   await page.getByLabel('Access code').fill(ACCESS_CODE);
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Log in to your carrier' })).toBeVisible();
@@ -76,14 +76,27 @@ test.describe('Demo carrier, end to end', () => {
     await expect(page.getByRole('heading', { name: 'Verification code' })).toHaveCount(0);
   });
 
-  test('a wrong code is rejected and can be retried', async ({ page }) => {
-    await enter(page);
+  // Over the polling fallback (?transport=poll), which the server can also choose with
+  // EVENTS_TRANSPORT=poll. One test, as the access-code limit (10 per IP) caps the suite.
+  test('a wrong code is rejected and can be retried (polling transport, no event stream)', async ({
+    page,
+  }) => {
+    const streams: string[] = [];
+    const polls: string[] = [];
+    page.on('request', (req) => {
+      const path = new URL(req.url()).pathname;
+      if (path.endsWith('/events')) streams.push(path);
+      if (path.endsWith('/snapshot')) polls.push(path);
+    });
+    await enter(page, '/?transport=poll');
     await startLogin(page, 'bob');
     await submitCode(page, '000000');
     await expect(page.getByText('Code rejected. Check it and try again.')).toBeVisible();
     await expect(page.getByText('Attempts left: 2')).toBeVisible();
     await submitCode(page, MFA_CODE);
     await expectDocuments(page);
+    expect(streams).toEqual([]);
+    expect(polls.length).toBeGreaterThan(1);
   });
 
   test('wrong password shows BAD_CREDENTIALS', async ({ page }) => {

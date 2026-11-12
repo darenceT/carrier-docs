@@ -36,6 +36,12 @@ describe('loadConfig', () => {
     expect(c.browserStrategy.carrier2).toBe('patched-headed');
   });
 
+  it('follows sessions over SSE unless EVENTS_TRANSPORT says poll', () => {
+    expect(loadConfig(validEnv()).eventsTransport).toBe('sse');
+    expect(loadConfig({ ...validEnv(), EVENTS_TRANSPORT: 'poll' }).eventsTransport).toBe('poll');
+    expect(() => loadConfig({ ...validEnv(), EVENTS_TRANSPORT: 'ws' })).toThrow(/EVENTS_TRANSPORT/);
+  });
+
   it('canary loads only the mock portal unless real carriers are listed', () => {
     expect(loadConfig(validEnv()).canaryCarriers).toEqual(['demo']);
     expect(
