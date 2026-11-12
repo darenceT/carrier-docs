@@ -1,6 +1,8 @@
 import { MOCK_PORTAL_BASE_PATH } from '@carrier-docs/mock-portal';
 import type { Page } from 'patchright';
 import type { Logger } from 'pino';
+import { runCanary, type CanaryReport } from './canary/canary.js';
+import { canaryTargets } from './canary/targets.js';
 import { createAntibot, createFingerprint, refreshFingerprint } from './antibot/index.js';
 import { DemoAdapter } from './carriers/demo/adapter.js';
 import type { CarrierAdapter } from './core/ports.js';
@@ -19,6 +21,8 @@ const PURGE_INTERVAL_MS = 60 * 60 * 1000;
 export interface Services {
   cipher: Cipher;
   sessions: SessionManager<Page>;
+  /** Loads each configured login page through the anti-bot layer; never logs in. */
+  runCanary(): Promise<CanaryReport>;
   close(): Promise<void>;
 }
 
@@ -34,12 +38,13 @@ export function createServices(config: Config, logger: Logger): Services {
   });
   const antibot = createAntibot(config, { logger, contextTimeoutMs: PAGE_ACTION_TIMEOUT_MS });
 
+  // The mock portal is served by this same process (see app.ts).
+  const demoBaseUrl = `http://127.0.0.1:${config.port}${MOCK_PORTAL_BASE_PATH}`;
   const adapters: CarrierAdapter<Page>[] = [];
   if (config.demoCarrierEnabled) {
-    // The mock portal is served by this same process (see app.ts).
     adapters.push(
       new DemoAdapter({
-        baseUrl: `http://127.0.0.1:${config.port}${MOCK_PORTAL_BASE_PATH}`,
+        baseUrl: demoBaseUrl,
         pacing: antibot.forCarrier('demo').pacing,
       }),
     );
@@ -80,9 +85,20 @@ export function createServices(config: Config, logger: Logger): Services {
   }, PURGE_INTERVAL_MS);
   purge.unref();
 
+  const targets = canaryTargets({
+    carriers: config.canaryCarriers,
+    ...(config.demoCarrierEnabled ? { demoBaseUrl } : {}),
+  });
+
   return {
     cipher,
     sessions,
+    runCanary: () =>
+      runCanary(targets, {
+        browserFor,
+        createFingerprint,
+        logger: logger.child({ component: 'canary' }),
+      }),
     async close() {
       clearInterval(purge);
       await sessions.close();

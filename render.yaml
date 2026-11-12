@@ -32,6 +32,10 @@ services:
         value: patched-headless
       - key: CARRIER2_BROWSER
         value: patched-headless
+      # Login pages /internal/canary loads (never logs in). To check the real carriers, set
+      # progressive,lemonade in the dashboard; demo only checks the local mock portal.
+      - key: CANARY_CARRIERS
+        value: demo
       - key: LOG_LEVEL
         value: info
       # Secrets: Render prompts for these in the dashboard; they never live in the repo.

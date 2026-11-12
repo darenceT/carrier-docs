@@ -36,6 +36,8 @@ export default defineConfig({
       LOG_LEVEL: 'warn',
       DEMO_CARRIER_ENABLED: 'true',
       MAX_SESSIONS: '1',
+      // Only the local mock portal, never a real carrier.
+      CANARY_CARRIERS: 'demo',
     },
   },
 });

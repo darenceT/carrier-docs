@@ -1,0 +1,25 @@
+name: canary
+# Daily check that each carrier's login page still loads cleanly from Render's IP. It calls a
+# token-protected endpoint on the deployed service, which opens each login page through the
+# anti-bot layer and reports clean or challenged. It never logs in.
+# Needs repository secrets CANARY_URL (e.g. https://<service>.onrender.com) and CANARY_TOKEN.
+on:
+  schedule:
+    - cron: '17 15 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call /internal/canary
+        env:
+          CANARY_URL: ${{ secrets.CANARY_URL }}
+          CANARY_TOKEN: ${{ secrets.CANARY_TOKEN }}
+        run: >
+          curl -fsS --max-time 240 -X POST
+          -H "Authorization: Bearer $CANARY_TOKEN"
+          "$CANARY_URL/internal/canary"
