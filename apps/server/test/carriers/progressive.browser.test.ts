@@ -12,7 +12,6 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium, type Browser as TestBrowser } from '@playwright/test';
 import type { BrowserContext, Page } from 'patchright';
-import { PDFDocument } from 'pdf-lib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { noPacing } from '../../src/antibot/pacing.js';
 import { ProgressiveAdapter } from '../../src/carriers/progressive/adapter.js';
@@ -311,23 +310,23 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
     };
 
-    it('lists per policy the first image, then the whole card as a PDF', async () => {
+    it('lists each card image as its own document and serves it as it came', async () => {
       await logIn();
       const docs = await adapter.listDocuments(page);
-      expect(docs.map((d) => [d.id, d.mimeType, d.policyNumberMasked])).toEqual([
-        ['idcard-1', 'image/png', '••••1111'],
-        ['idcard-1-pdf', 'application/pdf', '••••1111'],
-        ['idcard-2', 'image/png', '••••2222'],
-        ['idcard-2-pdf', 'application/pdf', '••••2222'],
+      expect(docs.map((d) => [d.id, d.title, d.mimeType, d.policyNumberMasked])).toEqual([
+        ['idcard-1', 'ID card (image 1 of 2)', 'image/png', '••••1111'],
+        ['idcard-1-image2', 'ID card (image 2 of 2)', 'image/png', '••••1111'],
+        ['idcard-2', 'ID card (image 1 of 2)', 'image/png', '••••2222'],
+        ['idcard-2-image2', 'ID card (image 2 of 2)', 'image/png', '••••2222'],
       ]);
-      // The headline document: the app's first image as it came, no conversion.
-      const first = await adapter.fetchDocument(page, 'idcard-1');
-      expect(first.mimeType).toBe('image/png');
-      expect(Buffer.from(first.body as Uint8Array).toString('base64')).toBe(PNG_B64);
-      // Lazily, the whole card: one page per image the app received.
-      const whole = await adapter.fetchDocument(page, 'idcard-1-pdf');
-      expect(whole.mimeType).toBe('application/pdf');
-      expect((await PDFDocument.load(whole.body as Uint8Array)).getPageCount()).toBe(2);
+      for (const id of ['idcard-1', 'idcard-1-image2']) {
+        const file = await adapter.fetchDocument(page, id);
+        expect(file.mimeType).toBe('image/png');
+        expect(Buffer.from(file.body as Uint8Array).toString('base64')).toBe(PNG_B64);
+      }
+      await expect(adapter.fetchDocument(page, 'idcard-1-image3')).rejects.toMatchObject({
+        code: 'CARRIER_PAGE_CHANGED',
+      });
     });
 
     it('names the refusal when a policy the app did not fetch is refused', async () => {
@@ -365,10 +364,10 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       appFetches = [['1111', 'WA-AA']]; // a consistent account: one policy everywhere
       await logIn();
       const docs = await adapter.listDocuments(page);
-      expect(docs.map((d) => d.id)).toEqual(['idcard-1', 'idcard-1-pdf']);
+      expect(docs.map((d) => d.id)).toEqual(['idcard-1', 'idcard-1-image2']);
       expect(docs[0]?.policyNumberMasked).toBe('••••1111');
-      const file = await adapter.fetchDocument(page, 'idcard-1-pdf');
-      expect(file.mimeType).toBe('application/pdf');
+      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(file.mimeType).toBe('image/png');
     });
 
     it('falls back to the app’s own ID-card request when the handshake lists no policies', async () => {
@@ -377,16 +376,12 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const docs = await adapter.listDocuments(page);
       expect(docs.map((d) => [d.id, d.policyNumberMasked])).toEqual([
         ['idcard-1', '••••1111'],
-        ['idcard-1-pdf', '••••1111'],
+        ['idcard-1-image2', '••••1111'],
         ['idcard-2', '••••2222'],
-        ['idcard-2-pdf', '••••2222'],
+        ['idcard-2-image2', '••••2222'],
       ]);
-      const file = await adapter.fetchDocument(page, 'idcard-1-pdf');
-      expect(
-        Buffer.from(file.body as Uint8Array)
-          .subarray(0, 5)
-          .toString('latin1'),
-      ).toBe('%PDF-');
+      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(file.mimeType).toBe('image/png');
     });
 
     it('does not wait on a Verify button the page has disabled while it submits itself', async () => {
@@ -445,12 +440,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const p2 = await fresh.newPage();
       expect(await adapter.isSessionValid(p2)).toBe(true);
       expect(await adapter.listDocuments(p2)).toHaveLength(4);
-      const file = await adapter.fetchDocument(p2, 'idcard-1-pdf');
-      expect(
-        Buffer.from(file.body as Uint8Array)
-          .subarray(0, 5)
-          .toString('latin1'),
-      ).toBe('%PDF-');
+      const file = await adapter.fetchDocument(p2, 'idcard-1');
+      expect(file.mimeType).toBe('image/png');
       await fresh.close();
 
       const empty = (await browser.newContext()) as unknown as BrowserContext;

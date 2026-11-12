@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
-import { firstCardFile, idCardFromDocuments } from '../../src/carriers/progressive/document.js';
+import { cardFile, cardFiles } from '../../src/carriers/progressive/document.js';
 import { findPolicies, policyFromDocumentUrl } from '../../src/carriers/progressive/policies.js';
 import { describeShape } from '../../src/carriers/shared.js';
 
@@ -66,49 +65,31 @@ describe('describeShape', () => {
   });
 });
 
-describe('idCardFromDocuments', () => {
+describe('cardFile', () => {
   const PNG_1x1 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   const b64 = (s: string) => Buffer.from(s, 'latin1').toString('base64');
 
-  it('returns a PDF as is', async () => {
-    const pdf = b64('%PDF-1.4\n%%EOF\n');
-    const out = await idCardFromDocuments([pdf]);
-    expect(Buffer.from(out).toString('latin1')).toBe('%PDF-1.4\n%%EOF\n');
-  });
-
-  it('turns the card images into one PDF, a page per image, skipping junk', async () => {
-    const out = await idCardFromDocuments([PNG_1x1, b64('not an image'), PNG_1x1]);
-    expect(Buffer.from(out.subarray(0, 5)).toString('latin1')).toBe('%PDF-');
-    expect((await PDFDocument.load(out)).getPageCount()).toBe(2);
-  });
-
-  it('reports a response with no usable file as CARRIER_PAGE_CHANGED', async () => {
-    for (const bad of [undefined, [], [7], [b64('junk')]]) {
-      await expect(idCardFromDocuments(bad)).rejects.toMatchObject({
-        code: 'CARRIER_PAGE_CHANGED',
-      });
-    }
-  });
-});
-
-describe('firstCardFile', () => {
-  const PNG_1x1 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-  const b64 = (s: string) => Buffer.from(s, 'latin1').toString('base64');
-
-  it('returns the first file as it came, typed by its bytes', () => {
-    const png = firstCardFile([PNG_1x1, b64('%PDF-1.4')]);
-    expect(png.mimeType).toBe('image/png');
-    expect(png.extension).toBe('png');
+  it('returns each file as it came, typed by its bytes', () => {
+    const files = [PNG_1x1, b64('%PDF-1.4\n'), b64('\xff\xd8\xff\xe0jpeg')];
+    expect(cardFiles(files)).toHaveLength(3);
+    const png = cardFile(files);
+    expect([png.mimeType, png.extension]).toEqual(['image/png', 'png']);
     expect(Buffer.from(png.bytes).toString('base64')).toBe(PNG_1x1);
-    expect(firstCardFile([b64('%PDF-1.4\n')]).mimeType).toBe('application/pdf');
-    expect(firstCardFile([b64('\xff\xd8\xff\xe0jpeg')]).mimeType).toBe('image/jpeg');
+    expect(cardFile(files, 1).mimeType).toBe('application/pdf');
+    expect(cardFile(files, 2).mimeType).toBe('image/jpeg');
   });
 
-  it('reports a missing or unknown file as CARRIER_PAGE_CHANGED', () => {
-    for (const bad of [undefined, [], [7], [b64('junk')]]) {
-      expect(() => firstCardFile(bad)).toThrow(
+  it('skips non-files when counting, and reports a missing or unknown file', () => {
+    expect(cardFiles([PNG_1x1, 7, '', null])).toEqual([PNG_1x1]);
+    expect(cardFiles(undefined)).toEqual([]);
+    for (const [docs, i] of [
+      [undefined, 0],
+      [[], 0],
+      [[PNG_1x1], 1],
+      [[b64('junk')], 0],
+    ] as const) {
+      expect(() => cardFile(docs, i)).toThrow(
         expect.objectContaining({ code: 'CARRIER_PAGE_CHANGED' }),
       );
     }
