@@ -131,11 +131,11 @@ more than a login page. **`MAX_SESSIONS` = 1 on Starter.** A larger plan fits ro
 Run with `live-login` (`apps/server/src/scripts/live-login.ts`) in the Render Shell, patched
 headless, Render's own IP. Times exclude the person typing credentials and codes.
 
-| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                            |
-| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29)             |
-| 2026-11-12 | Progressive | 4498 ms    | 875 ms               | 916 ms   | 1774 ms       | **OK.** Account page reached (+15095 ms, mostly script waits, see below). Repeat run with saved cookies: no login needed, account page in 6594 ms |
-| —          | Lemonade    |            |                      |          |               | Not run yet                                                                                                                                       |
+| Date       | Carrier     | Login page | Credentials accepted | SMS step | Code accepted | Result                                                                                                                                                                               |
+| ---------- | ----------- | ---------- | -------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-11-11 | Progressive | 4801 ms    | 803 ms               | 605 ms   | 1561 ms       | Login and SMS code accepted, no block or challenge. Script then failed ticking "remember this device" (custom checkbox; fixed in #29)                                                |
+| 2026-11-12 | Progressive | 4498 ms    | 875 ms               | 916 ms   | 1774 ms       | **OK.** Account page reached (+15095 ms, mostly script waits, see below). Repeat run with saved cookies: no login needed, account page in 6594 ms                                    |
+| 2026-11-12 | Lemonade    | 2394 ms    | 660 ms (SMS sent)    | —        | 929 ms        | **OK.** Policies API answered after +5782 ms (dashboard load); first policy PDF (1063 KB, valid) in +547 ms; total 10312 ms. Repeat run with saved cookies: no login needed, 3707 ms |
 
 Earlier attempts stopped before anything was typed (field lookup, then an invisible prompt; fixed
 in #21, #26, #27), so none counted as a login attempt.
@@ -159,6 +159,18 @@ Findings (Progressive):
 - **Remember-device unconfirmed:** no `pgrDevice_*` cookie was set this run, although one exists in
   the user's own browser. Either it's set differently, or the label click didn't choose "remember".
   The next fresh login settles it: skipping the SMS step means the device was remembered.
+
+Findings (Lemonade, 2026-11-12):
+
+- **Cloudflare did not challenge.** Email, SMS code and sign-in all passed from Render's IP with
+  patched headless, then both policies were listed and the first policy PDF downloaded (1063 KB,
+  valid; not saved).
+- **Session reuse works:** a fresh browser with only the saved cookies reached the account with no
+  login in 3.7 s. Important for Lemonade, which has no remember-device step.
+- **Latency:** 10.3 s machine time to the first document. The largest step (5.8 s) is waiting for
+  the dashboard to load and make its own policies call; the adapter calls the policies API itself
+  right after sign-in instead. With pre-warming hiding the 2.4 s login page, the estimated adapter
+  time is about 3 s machine time (about 5 s with the person typing the code). Not yet measured.
 
 ### Portal mapping
 
