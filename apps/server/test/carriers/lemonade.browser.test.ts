@@ -46,7 +46,7 @@ code.oninput = async () => {
   if (code.value.length !== 6) return;
   const r = await fetch('/login/signin', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: code.value, consentReceived: true }) });
-  if (r.status === 201) location.href = (await r.json()).redirectTo; else code.value = '';
+  if (r.status === 201) { const to = (await r.json()).redirectTo; setTimeout(() => { location.href = to; }, 400); } else code.value = '';
 };
 </script></body></html>`;
 
@@ -91,11 +91,17 @@ function createPortal(): http.Server {
       if (url.pathname === '/login/signin' && req.method === 'POST') {
         const { code } = await body(req);
         if (code !== CODE) return json(401, { error: 'bad_code' });
-        return json(
-          201,
-          { redirectTo: `${base}/home` },
-          { 'set-cookie': 'customer_session=ok; Path=/' },
-        );
+        // Like the real site: sign-in answers with a redirect target, and only following THAT
+        // establishes the login on the app (a one-time handoff). No cookie is set here.
+        return json(201, { redirectTo: `${base}/handoff?t=one-time` });
+      }
+      if (url.pathname === '/handoff') {
+        if (url.searchParams.get('t') !== 'one-time') {
+          res.writeHead(302, { location: '/login' });
+          return res.end();
+        }
+        res.writeHead(302, { location: '/home', 'set-cookie': 'customer_session=ok; Path=/' });
+        return res.end();
       }
       if (url.pathname === '/home') {
         if (!loggedIn(req)) {
