@@ -221,6 +221,15 @@ async function poll<T>(
   return null;
 }
 
+/** Progressive's logged-in app (account home and the rest of policy servicing). */
+function isAccountPage(url: string): boolean {
+  try {
+    return new URL(url).hostname === 'policyservicing.apps.progressive.com';
+  } catch {
+    return false;
+  }
+}
+
 async function progressive(page: Page, timer: StepTimer): Promise<void> {
   const pf = trackProgressive(page);
   await page.goto(PROGRESSIVE_LOGIN, { waitUntil: 'domcontentloaded', timeout: STEP_TIMEOUT_MS });
@@ -316,15 +325,22 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
     remember.waitFor({ state: 'visible', timeout: 10_000 }),
     rememberButton.waitFor({ state: 'visible', timeout: 10_000 }),
   ]).catch(() => undefined);
+  const reachedAccount = () => pf.loggedIn || isAccountPage(page.url());
   if (await remember.isVisible().catch(() => false)) {
     const ticked = await tickCheckbox(page, remember);
-    console.log(`  remember this device: ${ticked ? 'ticked' : 'could NOT be ticked'}`);
-    if (!ticked) {
-      console.log(
-        `\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`,
-      );
+    if (reachedAccount()) {
+      // Ticking it moved straight on to the account; there is no separate Continue.
+      console.log('  remember this device: chosen (page moved on to the account)');
+    } else {
+      console.log(`  remember this device: ${ticked ? 'ticked' : 'could NOT be ticked'}`);
+      if (!ticked) {
+        console.log(
+          `\nVisible form fields (attributes only, no values):\n${await describeFields(page)}`,
+        );
+      }
+      const next = page.getByRole('button', { name: /continue|submit|done|next|save/i }).first();
+      if (await within(next.isVisible(), 2_000, false)) await next.click();
     }
-    await clickButton(page, /continue|submit|done|next|save/i, 'continue');
   } else if (await rememberButton.isVisible().catch(() => false)) {
     await rememberButton.click();
     console.log('  remember this device: chosen');
@@ -334,8 +350,8 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
 
   const inAccount = await poll(
     page,
-    () => (pf.loggedIn ? true : undefined),
-    'the account API',
+    () => (reachedAccount() ? true : undefined),
+    'the account page',
     STEP_TIMEOUT_MS,
   );
   if (!inAccount)
@@ -343,7 +359,12 @@ async function progressive(page: Page, timer: StepTimer): Promise<void> {
       'CARRIER_PAGE_CHANGED',
       `account API didn't answer (last status ${pf.latest() ?? 'none'})`,
     );
-  timer.mark('logged in (account API answered)');
+  timer.mark('logged in (account page reached)');
+
+  // Proof that "remember this device" worked: Progressive's device-trust cookie. Name only.
+  const names = (await page.context().cookies()).map((c) => c.name);
+  const trusted = names.some((n) => n.startsWith('pgrDevice_'));
+  console.log(`  device-trust cookie (pgrDevice_*): ${trusted ? 'present' : 'absent'}`);
 }
 
 // ---------- Lemonade ----------
@@ -437,7 +458,9 @@ async function repeatRun(
     waitUntil: 'domcontentloaded',
     timeout: STEP_TIMEOUT_MS,
   });
-  const reused = await loggedIn.then(() => true).catch(() => false);
+  const reused = await loggedIn
+    .then(() => true)
+    .catch(() => carrier === 'progressive' && isAccountPage(page.url()));
   timer.mark(reused ? 'repeat run: logged in from saved state' : 'repeat run: login needed');
   console.log(`\nRepeat run with saved state: ${reused ? 'NO LOGIN NEEDED' : 'login required'}`);
   console.log(formatSteps(timer.steps));
