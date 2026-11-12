@@ -673,3 +673,111 @@ describe('SessionManager: metrics for /api/status', () => {
     expect(demo().outcomes).toEqual({ MFA_INVALID: 1 });
   });
 });
+
+describe('SessionManager: graceful shutdown (drain)', () => {
+  it('refuses new logins and pre-warms with BUSY while draining', async () => {
+    const drained = manager.drain(1_000);
+    await expect(manager.prewarm('o1', 'demo')).rejects.toMatchObject({ code: 'BUSY' });
+    await expect(
+      manager.start('o1', { carrierId: 'demo', username: 'nomfa', password: 'pw' }),
+    ).rejects.toMatchObject({ code: 'BUSY' });
+    await drained;
+  });
+
+  it('ends queued logins and unused pre-warms right away', async () => {
+    makeManager({ maxSessions: 1 });
+    const first = await login('o1', 'alice'); // holds the slot at MFA
+    await settle();
+    const queued = await login('o2', 'nomfa');
+    await settle();
+    expect(statuses(queued.events)).toEqual(['queued']);
+
+    const drained = manager.drain(1_000);
+    await settle();
+    expect(last(queued.events)).toMatchObject({
+      type: 'failed',
+      code: 'CARRIER_UNAVAILABLE',
+      retryable: true,
+    });
+    expect(manager.inFlight()).toBe(1); // alice, still waiting for a code
+    await manager.submitMfa('o1', first.sessionId, CODE);
+    await settle();
+    await vi.advanceTimersByTimeAsync(200);
+    await drained;
+    expect(last(first.events)).toEqual({ type: 'done' });
+  });
+
+  it('lets an in-flight login finish within the drain time', async () => {
+    const { sessionId, events } = await login('o1', 'alice');
+    await settle();
+    let drainedAt: number | undefined;
+    const drained = manager.drain(25_000).then(() => (drainedAt = Date.now()));
+    const started = Date.now();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(drainedAt).toBeUndefined();
+    await manager.submitMfa('o1', sessionId, CODE);
+    await vi.advanceTimersByTimeAsync(200);
+    await drained;
+    expect(last(events)).toEqual({ type: 'done' });
+    expect(drainedAt! - started).toBeLessThan(6_000);
+  });
+
+  it('gives up after the drain time; close() then fails what is left, retryable', async () => {
+    const { events } = await login('o1', 'alice');
+    await settle();
+    const drained = manager.drain(2_000);
+    await vi.advanceTimersByTimeAsync(2_200);
+    await drained;
+    expect(manager.inFlight()).toBe(1);
+    await manager.close();
+    expect(last(events)).toMatchObject({
+      type: 'failed',
+      code: 'CARRIER_UNAVAILABLE',
+      retryable: true,
+    });
+  });
+});
+
+describe('SessionManager: the browser goes away mid-session', () => {
+  it('fails the session with CARRIER_UNAVAILABLE (retryable), not INTERNAL', async () => {
+    const { sessionId, events } = await login('o1', 'alice');
+    await settle();
+    const crash = new Error('page.fill: Target page, context or browser has been closed');
+    vi.spyOn(carrier, 'submitMfa').mockRejectedValueOnce(crash);
+    await manager.submitMfa('o1', sessionId, CODE);
+    await settle();
+    expect(last(events)).toMatchObject({
+      type: 'failed',
+      code: 'CARRIER_UNAVAILABLE',
+      retryable: true,
+    });
+    // The slot is free again and the next login works.
+    const next = await login('o2', 'nomfa');
+    await settle();
+    expect(last(next.events)).toEqual({ type: 'done' });
+  });
+
+  it('reads "page changed" on a closed page as the browser going away', async () => {
+    const { sessionId, events } = await login('o1', 'alice');
+    await settle();
+    vi.spyOn(carrier, 'submitMfa').mockImplementationOnce(async (page) => {
+      Object.assign(page, { isClosed: () => true });
+      throw new AppError('CARRIER_PAGE_CHANGED', 'not on MFA page');
+    });
+    await manager.submitMfa('o1', sessionId, CODE);
+    await settle();
+    expect(last(events)).toMatchObject({ code: 'CARRIER_UNAVAILABLE', retryable: true });
+  });
+
+  it('keeps CARRIER_PAGE_CHANGED when the page is still open', async () => {
+    const { sessionId, events } = await login('o1', 'alice');
+    await settle();
+    vi.spyOn(carrier, 'submitMfa').mockImplementationOnce(async (page) => {
+      Object.assign(page, { isClosed: () => false });
+      throw new AppError('CARRIER_PAGE_CHANGED', 'not on MFA page');
+    });
+    await manager.submitMfa('o1', sessionId, CODE);
+    await settle();
+    expect(last(events)).toMatchObject({ code: 'CARRIER_PAGE_CHANGED', retryable: false });
+  });
+});
