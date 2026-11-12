@@ -21,6 +21,8 @@ export interface CarrierAntibot {
   pool: BrowserPool;
   egress: EgressProvider;
   pacing: Pacing;
+  /** Skip pictures, fonts and trackers on this carrier's pages (see resources.ts). */
+  blockResources: boolean;
 }
 
 export interface Antibot {
@@ -31,7 +33,8 @@ export interface Antibot {
   close(): Promise<void>;
 }
 
-export type AntibotConfig = Pick<Config, 'browserStrategy' | 'egressProxyUrl'>;
+export type AntibotConfig = Pick<Config, 'browserStrategy' | 'egressProxyUrl'> &
+  Partial<Pick<Config, 'resourceBlocking'>>;
 
 export interface AntibotOptions {
   logger: Logger;
@@ -84,6 +87,8 @@ export function createAntibot(config: AntibotConfig, options: AntibotOptions): A
         // The mock portal is local: a proxy would only add latency and cost.
         egress: isDemo ? createEgress(undefined) : egress,
         pacing: isDemo ? noPacing : lightPacing(),
+        // The mock portal is tiny and local: nothing to gain.
+        blockResources: !isDemo && config.resourceBlocking !== false,
       };
     },
     async warmup(carrierIds) {
