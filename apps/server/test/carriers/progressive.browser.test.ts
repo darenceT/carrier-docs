@@ -120,6 +120,10 @@ let askChannel = false;
 let autoSubmit = false;
 /** What the imitation's handshake returns; tests swap it to imitate a changed response. */
 let handshakeBody: unknown = SPIKE_HANDSHAKE;
+/** How long the handshake takes to answer. */
+let handshakeDelayMs = 0;
+/** What reached the API, in order: 'handshake asked', 'handshake answered', 'card asked'. */
+let apiEvents: string[] = [];
 
 /**
  * Like the real one, the API is on another origin than the app and authenticates by Bearer
@@ -216,10 +220,14 @@ function createPortal(): http.Server {
         }
         if (req.headers.authorization !== TOKEN) return json(401, { error: 'unauthorized' });
         if (url.pathname === '/policypro/v1/handshake') {
+          apiEvents.push('handshake asked');
+          if (handshakeDelayMs) await new Promise((r) => setTimeout(r, handshakeDelayMs));
+          apiEvents.push('handshake answered');
           return json(200, handshakeBody);
         }
         const m = /^\/policypro\/v1\/policies\/(\d+)\/document$/.exec(url.pathname);
         if (m && req.method === 'POST') {
+          apiEvents.push('card asked');
           const b = await readBody(req);
           // The fields we don't know the meaning of must be copied from the app's request.
           if (b.type !== 'idCard' || b.policyTerm !== 'T1' || b.dpi !== 96) {
@@ -291,6 +299,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     afterEach(async () => {
       adapter = sharedAdapter;
       handshakeBody = SPIKE_HANDSHAKE;
+      handshakeDelayMs = 0;
+      apiEvents = [];
       signed = true;
       autoSubmit = false;
       askChannel = false;
@@ -327,6 +337,40 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       await expect(adapter.fetchDocument(page, 'idcard-1-image3')).rejects.toMatchObject({
         code: 'CARRIER_PAGE_CHANGED',
       });
+    });
+
+    it('opens the ID cards page while the handshake is still coming, not after it', async () => {
+      handshakeDelayMs = 1500;
+      await logIn();
+      const started = Date.now();
+      const docs = await adapter.listDocuments(page);
+      expect(docs.map((d) => d.id)).toEqual([
+        'idcard-1',
+        'idcard-1-image2',
+        'idcard-2',
+        'idcard-2-image2',
+      ]);
+      // The app's card requests reached the API before the slow handshake answered, and the
+      // listing did not wait the handshake out.
+      const answered = apiEvents.indexOf('handshake answered');
+      const asked = apiEvents.indexOf('card asked');
+      expect(asked).toBeGreaterThanOrEqual(0);
+      expect(answered === -1 || asked < answered).toBe(true);
+      expect(Date.now() - started).toBeLessThan(1500);
+      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(Buffer.from(file.body as Uint8Array).toString('base64')).toBe(PNG_B64);
+    });
+
+    it('opens the ID cards page once when asked for it twice at the same time', async () => {
+      await logIn();
+      const [a, b] = await Promise.all([
+        adapter.listDocuments(page),
+        adapter.fetchDocument(page, 'idcard-1'),
+      ]);
+      expect(a).toHaveLength(4);
+      expect(b.mimeType).toBe('image/png');
+      // One visit to the ID cards page: one card request per policy.
+      expect(apiEvents.filter((e) => e === 'card asked')).toHaveLength(2);
     });
 
     it('names the refusal when a policy the app did not fetch is refused', async () => {
