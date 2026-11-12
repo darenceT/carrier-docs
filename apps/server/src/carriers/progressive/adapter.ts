@@ -109,6 +109,8 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private readonly watches = new WeakMap<Page, Watch>();
   /** Document ID -> the policy it belongs to, per page. */
   private readonly policies = new WeakMap<Page, Map<string, Policy>>();
+  /** The ID cards page being opened, per page: callers share one click-through. */
+  private readonly opening = new WeakMap<Page, Promise<Template>>();
 
   constructor(options: ProgressiveAdapterOptions) {
     this.log = options.log ?? (() => undefined);
@@ -298,13 +300,17 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       throw new AppError('SESSION_EXPIRED', 'not logged in');
     }
     const t = timer();
+    // Opening the ID cards page makes the app fetch each card (as images). Start that now, while
+    // the account's handshake (the policy list) is still coming: the two took 4.4 s and 5.5 s
+    // one after the other. A failure here is reported by the await below.
+    const cardsPage = this.documentTemplate(page);
+    cardsPage.catch(() => undefined);
     const policies = await this.accountPolicies(page, w);
     this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
-    // Opening the ID cards page makes the app fetch each card (as images). Each image is its own
-    // document, served as it came: no conversion. The list waits for the cards so it knows how
-    // many there are; the first document needs the first card anyway.
-    await this.documentTemplate(page);
+    // Each image is its own document, served as it came: no conversion. The list waits for the
+    // cards so it knows how many there are; the first document needs the first card anyway.
+    await cardsPage;
     const docs: DocumentMeta[] = [];
     for (const [i, p] of policies.entries()) {
       const id = `idcard-${i + 1}`;
@@ -572,9 +578,18 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   }
 
   /** The app's own ID-card request. If it hasn't made one yet, open the ID cards page so it does. */
-  private async documentTemplate(page: Page): Promise<Template> {
+  private documentTemplate(page: Page): Promise<Template> {
     const w = this.watch(page);
-    if (w.template) return w.template;
+    if (w.template) return Promise.resolve(w.template);
+    let opening = this.opening.get(page);
+    if (!opening) {
+      opening = this.openIdCards(page, w).finally(() => this.opening.delete(page));
+      this.opening.set(page, opening);
+    }
+    return opening;
+  }
+
+  private async openIdCards(page: Page, w: Watch): Promise<Template> {
     const link = page
       .getByRole('link', { name: selectors.idCards })
       .or(page.getByRole('button', { name: selectors.idCards }))
