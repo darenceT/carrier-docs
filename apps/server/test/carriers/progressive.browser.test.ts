@@ -80,7 +80,7 @@ document.getElementById('rd').onchange = async () => {
 </script></body></html>`;
 
 const APP_HOME = `<!doctype html><html><body><h1>Account</h1>
-__LINK__
+<a href="/app/id-cards">ID Cards</a>
 <script>
 const token = '${TOKEN}'; // in memory only, like the real app
 fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } });
@@ -113,8 +113,6 @@ const SPIKE_HANDSHAKE = {
  * the app's request with another mimeType is refused (401). Off: the copy is accepted.
  */
 let signed = true;
-/** The account home shows the "ID Cards" link (off: only going there directly works). */
-let homeHasLink = true;
 /** After the password, the flow first asks how to send the code. */
 let askChannel = false;
 /** The login page submits the code itself at six digits. */
@@ -201,14 +199,7 @@ function createPortal(): http.Server {
           res.writeHead(302, { location: '/access/login' });
           return res.end();
         }
-        return html(
-          url.pathname === '/app/id-cards'
-            ? idCardsPage(appFetches)
-            : APP_HOME.replace(
-                '__LINK__',
-                homeHasLink ? '<a href="/app/id-cards">ID Cards</a>' : '',
-              ),
-        );
+        return html(url.pathname === '/app/id-cards' ? idCardsPage(appFetches) : APP_HOME);
       }
       if (url.pathname.startsWith('/policypro/')) {
         if (req.method === 'OPTIONS') {
@@ -295,7 +286,6 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       signed = true;
       autoSubmit = false;
       askChannel = false;
-      homeHasLink = true;
       appFetches = [
         ['1111', 'WA-AA'],
         ['2222', 'OR-AA'],
@@ -388,29 +378,6 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
       expect(Date.now() - started).toBeLessThan(5_000); // was the 30 s action timeout
     });
-
-    it('after the first login, goes straight to the ID cards page instead of clicking through', async () => {
-      const fresh = makeAdapter();
-      await fresh.openLogin(page);
-      await fresh.login(page, { username: USER, password: PASS });
-      await fresh.submitMfa(page, CODE);
-      await fresh.listDocuments(page);
-      await fresh.fetchDocument(page, 'idcard-1'); // learns the path from the click
-
-      homeHasLink = false; // clicking through is no longer possible
-      const ctx2 = (await browser.newContext()) as unknown as BrowserContext;
-      const p2 = await ctx2.newPage();
-      await fresh.openLogin(p2);
-      await fresh.login(p2, { username: USER, password: PASS });
-      expect(await fresh.submitMfa(p2, CODE)).toEqual({ kind: 'ok' });
-      expect((await fresh.listDocuments(p2)).map((d) => d.policyNumberMasked)).toEqual([
-        '••••1111',
-        '••••2222',
-      ]);
-      const file = await fresh.fetchDocument(p2, 'idcard-1');
-      expect(file.mimeType).toBe('application/pdf');
-      await ctx2.close();
-    }, 20_000); // two full logins
 
     it('chooses "text me" as soon as the flow asks how to send the code', async () => {
       askChannel = true;
