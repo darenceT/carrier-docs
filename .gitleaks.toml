@@ -1,0 +1,10 @@
+# Default gitleaks rules, plus one allowlisted value: the public local-dev SESSION_KEY from
+# .env.example (base64 of "local-dev-only-key-not-a-secret!"). The server refuses it on Render.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public local-dev values from .env.example"
+# Matched without the trailing "=", whatever part of the line a rule captures.
+regexTarget = "line"
+regexes = ['''bG9jYWwtZGV2LW9ubHkta2V5LW5vdC1hLXNlY3JldCE''']

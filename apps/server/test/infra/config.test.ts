@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../../src/infra/config.js';
+import { ConfigError, LOCAL_DEV_SECRETS, loadConfig } from '../../src/infra/config.js';
 
 const validEnv = () => ({
   SESSION_KEY: randomBytes(32).toString('base64'),
@@ -44,6 +45,41 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnv(), CANARY_CARRIERS: 'demo,acme' })).toThrow(
       /CANARY_CARRIERS/,
     );
+  });
+
+  it('starts from .env.example as is, so the README quick start works', () => {
+    const example = Object.fromEntries(
+      readFileSync(new URL('../../../../.env.example', import.meta.url), 'utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+    );
+    expect(() => loadConfig(example)).not.toThrow();
+    for (const [k, v] of Object.entries(LOCAL_DEV_SECRETS)) expect(example[k]).toBe(v);
+  });
+
+  it('refuses the public .env.example secrets on Render, naming only the variables', () => {
+    expect(() => loadConfig({ ...LOCAL_DEV_SECRETS })).not.toThrow();
+    try {
+      loadConfig({ ...validEnv(), ...LOCAL_DEV_SECRETS, RENDER: 'true' });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as ConfigError).problems).toHaveLength(3);
+      expect((err as ConfigError).problems.map((p) => p.split(':')[0])).toEqual([
+        'SESSION_KEY',
+        'ACCESS_CODE',
+        'CANARY_TOKEN',
+      ]);
+      expect((err as Error).message).not.toContain(LOCAL_DEV_SECRETS.ACCESS_CODE);
+    }
+    const real = {
+      SESSION_KEY: randomBytes(32).toString('base64'),
+      ACCESS_CODE: randomBytes(12).toString('hex'),
+      CANARY_TOKEN: randomBytes(12).toString('hex'),
+    };
+    expect(() => loadConfig({ ...real, RENDER: 'true' })).not.toThrow();
   });
 
   it('treats empty strings as unset', () => {
