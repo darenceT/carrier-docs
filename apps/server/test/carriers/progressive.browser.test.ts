@@ -52,12 +52,19 @@ document.getElementById('signin').onclick = async () => {
   await call('authenticate');
   creds.hidden = true; otp.hidden = false;
 };
-document.getElementById('verify').onclick = async () => {
+const verifyCode = async () => {
+  verify.disabled = true;
   const r = await call('checkOtp', { otp: vc.value });
-  if (!r.ok) { err.textContent = 'That code is incorrect'; vc.value = ''; return; }
+  // Accepted: the button stays disabled until the page moves on (re-enabled only to retry).
+  if (!r.ok) { verify.disabled = false; err.textContent = 'That code is incorrect'; vc.value = ''; return; }
   await call('continueAuthentication');
+  // Like the real page, the account takes a moment to answer before the next step shows.
+  await new Promise((r) => setTimeout(r, 300));
   otp.hidden = true; remember.hidden = false;
 };
+document.getElementById('verify').onclick = verifyCode;
+// Some versions submit by themselves at six digits, leaving Verify visible but disabled.
+if (__AUTO__) vc.addEventListener('input', () => { if (vc.value.length === 6) verifyCode(); });
 document.getElementById('rd').onchange = async () => {
   await call('setDeviceProperties', { rememberDevice: true });
   location.href = '/app/account-home';
@@ -98,6 +105,8 @@ const SPIKE_HANDSHAKE = {
  * the app's request with another mimeType is refused (401). Off: the copy is accepted.
  */
 let signed = true;
+/** The login page submits the code itself at six digits. */
+let autoSubmit = false;
 /** What the imitation's handshake returns; tests swap it to imitate a changed response. */
 let handshakeBody: unknown = SPIKE_HANDSHAKE;
 
@@ -147,7 +156,7 @@ function createPortal(): http.Server {
           res.writeHead(302, { location: '/app/account-home' });
           return res.end();
         }
-        return html(LOGIN_HTML);
+        return html(LOGIN_HTML.replace('__AUTO__', String(autoSubmit)));
       }
       if (url.pathname === FLOW) {
         const action = url.searchParams.get('action');
@@ -249,12 +258,14 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
 
     beforeEach(async () => {
       context = (await browser.newContext()) as unknown as BrowserContext;
+      context.setDefaultTimeout(30_000); // as in production (browser pool)
       page = await context.newPage();
     });
 
     afterEach(async () => {
       handshakeBody = SPIKE_HANDSHAKE;
       signed = true;
+      autoSubmit = false;
       appFetches = [
         ['1111', 'WA-AA'],
         ['2222', 'OR-AA'],
@@ -332,6 +343,15 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
           .subarray(0, 5)
           .toString('latin1'),
       ).toBe('%PDF-');
+    });
+
+    it('does not wait on a Verify button the page has disabled while it submits itself', async () => {
+      autoSubmit = true;
+      await adapter.openLogin(page);
+      await adapter.login(page, { username: USER, password: PASS });
+      const started = Date.now();
+      expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
+      expect(Date.now() - started).toBeLessThan(5_000); // was the 30 s action timeout
     });
 
     it('asks again after a wrong code', async () => {

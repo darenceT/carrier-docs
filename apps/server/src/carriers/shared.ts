@@ -5,6 +5,12 @@ import { AppError } from '../core/errors.js';
 
 /** Helpers every carrier adapter uses. Nothing here is carrier-specific. */
 
+/**
+ * Where an adapter reports sub-step timings, for the latency work: step names, milliseconds and
+ * outcomes only. Never credentials, codes, cookies, tokens, URLs with keys or document contents.
+ */
+export type StepLog = (msg: string, fields: Record<string, number | string | boolean>) => void;
+
 const KIND_ORDER: Record<DocumentKind, number> = {
   id_card: 0,
   declarations: 1,

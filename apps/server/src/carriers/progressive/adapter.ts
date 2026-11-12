@@ -15,6 +15,7 @@ import type {
 } from '../../core/ports.js';
 import { isBrowserGone } from '../../browser/errors.js';
 import {
+  type StepLog,
   describeShape,
   evaluateInPage,
   inPageFailure,
@@ -39,7 +40,17 @@ export interface ProgressiveAdapterOptions {
   urls?: Partial<ProgressiveUrls>;
   /** Timeout for one carrier step (a page load, a login call). Default 30 s. */
   stepTimeoutMs?: number;
+  /** Where sub-step timings go (timings and outcomes only, never values). */
+  log?: StepLog;
 }
+
+type ClickResult = 'clicked' | 'not needed' | 'failed';
+
+/** Milliseconds since it was made. */
+const timer = () => {
+  const start = Date.now();
+  return () => Date.now() - start;
+};
 
 const MFA_HINT = 'Progressive texted a code to the phone on your account.';
 
@@ -86,12 +97,14 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private readonly urls: ProgressiveUrls;
   private readonly pacing: Pacing;
   private readonly timeout: number;
+  private readonly log: StepLog;
   private readonly detector = new BlockDetector(blockRules);
   private readonly watches = new WeakMap<Page, Watch>();
   /** Document ID -> the policy it belongs to, per page. */
   private readonly policies = new WeakMap<Page, Map<string, Policy>>();
 
   constructor(options: ProgressiveAdapterOptions) {
+    this.log = options.log ?? (() => undefined);
     this.urls = { ...PROGRESSIVE_URLS, ...options.urls };
     this.pacing = options.pacing;
     this.timeout = options.stepTimeoutMs ?? 30_000;
@@ -148,22 +161,26 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
 
   async submitMfa(page: Page, code: string): Promise<LoginOutcome> {
     const w = this.watch(page);
+    const t = timer();
     const checksBefore = w.otpChecks.length;
     const completedBefore = w.statuses.filter((s) => s === 'MFA_COMPLETED').length;
 
     const field = await this.field(page, selectors.code, 'code field');
     await step('code field', () => this.pacing.type(field, code));
-    // The form may submit itself or move on as soon as the code is entered; a Verify click on a
-    // button that has just gone must not fail the login. Progressive's own status decides below.
+    const typedMs = t();
+    // The form may submit itself as soon as the code is entered. A Verify click must then not
+    // wait on a button that is disabled or gone: it stops as soon as Progressive moves on.
     const verify = page.getByRole('button', { name: selectors.verify }).first();
     const moved = () =>
       w.statuses.filter((st) => st === 'MFA_COMPLETED').length > completedBefore ||
       w.otpChecks.length > checksBefore ||
       this.onApp(page);
+    let verifyClick: ClickResult | 'enter' = 'not needed';
     if (!moved()) {
       if (await verify.isVisible().catch(() => false)) {
-        await this.pacing.click(verify).catch(() => undefined);
+        verifyClick = await this.clickUnless(page, verify, moved);
       } else {
+        verifyClick = 'enter';
         await field.press('Enter').catch(() => undefined);
       }
     }
@@ -175,28 +192,74 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       if (check !== undefined && check >= 400) return 'rejected';
       return undefined;
     });
+    const verifiedMs = t();
     if (result === 'rejected') {
       const status = w.otpChecks[checksBefore];
+      this.log('progressive mfa', { typedMs, verifyClick, verifiedMs, result: 'rejected' });
       if (status === 403 || status === 429) return this.failure(page, status);
       return { kind: 'mfa_required', hint: MFA_HINT, rejected: true };
     }
-    if (result !== 'ok') return this.failure(page);
+    if (result !== 'ok') {
+      this.log('progressive mfa', { typedMs, verifyClick, verifiedMs, result: 'no answer' });
+      return this.failure(page);
+    }
 
-    // "Remember this device": on the real page the box is custom-drawn and clicking its label is
-    // what works; doing so moves straight on to the account.
+    // "Remember this device": the box is custom-drawn and clicking its label is what works;
+    // doing so moves straight on to the account. Bounded: an overlay that swallows the click
+    // must not cost the full action timeout (it did: ~30 s per login).
+    let remember: ClickResult | 'not shown' | 'forced' = 'not needed';
     if (!this.onApp(page)) {
-      const label = page.getByText(selectors.remember).first();
-      if (
-        await label.waitFor({ state: 'visible', timeout: 5_000 }).then(
-          () => true,
-          () => false,
-        )
-      ) {
-        await this.pacing.click(label).catch(() => undefined);
+      const label = page
+        .locator('label')
+        .filter({ hasText: selectors.remember })
+        .or(page.getByText(selectors.remember))
+        .first();
+      const shown = await label.waitFor({ state: 'visible', timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      );
+      if (!shown) remember = this.onApp(page) ? 'not needed' : 'not shown';
+      else {
+        remember = await this.clickUnless(page, label, () => this.onApp(page));
+        if (remember === 'failed') {
+          remember = 'forced';
+          await label.click({ force: true, timeout: 2_000 }).catch(() => undefined);
+        }
       }
     }
+    const rememberMs = t();
     const inApp = await this.until(page, () => (this.onApp(page) ? true : undefined));
+    this.log('progressive mfa', {
+      typedMs,
+      verifyClick,
+      verifiedMs,
+      remember,
+      rememberMs,
+      appMs: t(),
+      result: inApp ? 'ok' : 'no account page',
+    });
     return inApp ? { kind: 'ok' } : this.failure(page);
+  }
+
+  /**
+   * Click `target` unless `done()` turns true first, never waiting more than `ms`. A click on a
+   * button the page is replacing would otherwise wait the whole action timeout.
+   */
+  private async clickUnless(
+    page: Page,
+    target: Locator,
+    done: () => boolean,
+    ms = 4_000,
+  ): Promise<ClickResult> {
+    if (done()) return 'not needed';
+    const click = this.pacing.click({ click: (o) => target.click({ ...o, timeout: ms }) }).then(
+      () => 'clicked' as const,
+      () => 'failed' as const,
+    );
+    const moved = this.until(page, () => (done() ? ('not needed' as const) : undefined), ms).then(
+      (v) => v ?? ('failed' as const),
+    );
+    return Promise.race([click, moved]);
   }
 
   async isSessionValid(page: Page): Promise<boolean> {
@@ -216,7 +279,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (!this.onApp(page) && !(await this.isSessionValid(page))) {
       throw new AppError('SESSION_EXPIRED', 'not logged in');
     }
+    const t = timer();
     const policies = await this.accountPolicies(page, w);
+    this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
     const docs = policies.map((p, i): DocumentMeta => {
       const id = `idcard-${i + 1}`;
@@ -240,6 +305,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const policy = this.policies.get(page)?.get(documentId);
     if (!policy) throw new AppError('NOT_FOUND');
     const w = this.watch(page);
+    const t = timer();
     const template = await this.documentTemplate(page);
     const done = (bytes: Uint8Array): DocumentContent => ({
       mimeType: 'application/pdf',
@@ -254,6 +320,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       await this.until(page, () => ownFor(), 10_000);
     }
     const own = ownFor();
+    this.log('progressive id card', {
+      source: own && own.status >= 200 && own.status < 300 ? 'app' : 'ours',
+      ownStatus: own?.status ?? 0,
+      ms: t(),
+    });
     if (own && own.status >= 200 && own.status < 300) {
       return done(
         await idCardFromDocuments((own.json as { documents?: unknown } | undefined)?.documents),
@@ -436,8 +507,18 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       .getByRole('link', { name: selectors.idCards })
       .or(page.getByRole('button', { name: selectors.idCards }))
       .first();
-    await step('ID cards link', () => link.click({ timeout: this.timeout }));
+    const t = timer();
+    const clicked = await this.clickUnless(
+      page,
+      link,
+      () => w.template !== undefined,
+      this.timeout,
+    );
+    const clickMs = t();
     const template = await this.until(page, () => w.template);
+    this.log('progressive id cards page', { clicked, clickMs, requestMs: t(), found: !!template });
+    if (!template && clicked === 'failed')
+      throw new AppError('CARRIER_PAGE_CHANGED', 'ID cards link');
     if (!template) throw new AppError('CARRIER_PAGE_CHANGED', 'no ID card request from the app');
     return template;
   }

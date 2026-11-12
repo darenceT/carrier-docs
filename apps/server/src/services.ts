@@ -49,10 +49,13 @@ export function createServices(config: Config, logger: Logger): Services {
   // The mock portal is served by this same process (see app.ts).
   const demoBaseUrl = `http://127.0.0.1:${config.port}${MOCK_PORTAL_BASE_PATH}`;
   // Real carriers first, so the dropdown lists them above the Demo carrier.
+  // Sub-step timings from the adapters: names, milliseconds and outcomes only.
+  const carrierLog = logger.child({ component: 'carrier' });
   const adapters: CarrierAdapter<Page>[] = [
     new ProgressiveAdapter({
       pacing: antibot.forCarrier('progressive').pacing,
       stepTimeoutMs: PAGE_ACTION_TIMEOUT_MS,
+      log: (msg, fields) => carrierLog.info({ carrierId: 'progressive', ...fields }, msg),
     }),
     new LemonadeAdapter({
       pacing: antibot.forCarrier('lemonade').pacing,
