@@ -12,6 +12,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium, type Browser as TestBrowser } from '@playwright/test';
 import type { BrowserContext, Page } from 'patchright';
+import { PDFDocument } from 'pdf-lib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { noPacing } from '../../src/antibot/pacing.js';
 import { ProgressiveAdapter } from '../../src/carriers/progressive/adapter.js';
@@ -22,7 +23,9 @@ const PASS = 'pw-123';
 const CODE = '654321';
 const TOKEN = 'Bearer fake-token';
 const PDF_B64 = Buffer.from('%PDF-1.4\n% fake ID card\n%%EOF\n', 'latin1').toString('base64');
-const PNG_B64 = Buffer.from('\x89PNG fake', 'latin1').toString('base64');
+// A real 1x1 PNG: the app's own request returns images, which the adapter turns into a PDF.
+const PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const FLOW = '/pf-ws/authn/flows/f1';
 
@@ -68,11 +71,21 @@ const token = '${TOKEN}'; // in memory only, like the real app
 fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } });
 </script></body></html>`;
 
-const ID_CARDS = `<!doctype html><html><body><h1>ID cards</h1><script>
-fetch('__API__/v1/policies/1111/document?policyInfoKey=WA-AA', { method: 'POST',
-  headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'content-type': 'application/json' },
-  body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
+/** The ID cards page: the app fetches a card (as images) for each policy it shows. */
+const idCardsPage = (
+  policies: [string, string][],
+) => `<!doctype html><html><body><h1>ID cards</h1><script>
+for (const [n, key] of ${JSON.stringify(policies)}) {
+  fetch('__API__/v1/policies/' + n + '/document?policyInfoKey=' + key, { method: 'POST',
+    headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'x-prg-signature': 'sig:png', 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
+}
 </script></body></html>`;
+/** Which policies the app fetches cards for on that page. */
+let appFetches: [string, string][] = [
+  ['1111', 'WA-AA'],
+  ['2222', 'OR-AA'],
+];
 
 const SPIKE_HANDSHAKE = {
   policySessions: [
@@ -80,6 +93,11 @@ const SPIKE_HANDSHAKE = {
     { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA' },
   ],
 };
+/**
+ * Like (we believe) the real API: each document request is signed over its body, so a copy of
+ * the app's request with another mimeType is refused (401). Off: the copy is accepted.
+ */
+let signed = true;
 /** What the imitation's handshake returns; tests swap it to imitate a changed response. */
 let handshakeBody: unknown = SPIKE_HANDSHAKE;
 
@@ -90,7 +108,8 @@ let handshakeBody: unknown = SPIKE_HANDSHAKE;
 let apiBase = '';
 const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, content-type, x-prgaccountsessionid',
+  'access-control-allow-headers':
+    'authorization, content-type, x-prgaccountsessionid, x-prg-signature',
   'access-control-allow-methods': 'GET, POST',
 };
 
@@ -158,7 +177,7 @@ function createPortal(): http.Server {
           res.writeHead(302, { location: '/access/login' });
           return res.end();
         }
-        return html(url.pathname === '/app/id-cards' ? ID_CARDS : APP_HOME);
+        return html(url.pathname === '/app/id-cards' ? idCardsPage(appFetches) : APP_HOME);
       }
       if (url.pathname.startsWith('/policypro/')) {
         if (req.method === 'OPTIONS') {
@@ -177,6 +196,9 @@ function createPortal(): http.Server {
             return json(400, { error: 'bad request' });
           }
           if (!url.searchParams.get('policyInfoKey')) return json(400, { error: 'no key' });
+          if (signed && req.headers['x-prg-signature'] !== `sig:${String(b.mimeType)}`) {
+            return json(401, { error: 'bad signature' });
+          }
           return json(200, {
             message: '',
             signature: 's',
@@ -232,6 +254,11 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
 
     afterEach(async () => {
       handshakeBody = SPIKE_HANDSHAKE;
+      signed = true;
+      appFetches = [
+        ['1111', 'WA-AA'],
+        ['2222', 'OR-AA'],
+      ];
       await context.close();
     });
 
@@ -243,14 +270,34 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(await adapter.submitMfa(page, CODE)).toEqual({ kind: 'ok' });
     };
 
-    it('logs in, ticks remember-device via its label, lists ID cards and fetches a PDF', async () => {
+    it('logs in, lists ID cards, and serves the app’s own card images as one PDF', async () => {
       await logIn();
       const docs = await adapter.listDocuments(page);
       expect(docs.map((d) => [d.id, d.kind, d.policyNumberMasked])).toEqual([
         ['idcard-1', 'id_card', '••••1111'],
         ['idcard-2', 'id_card', '••••2222'],
       ]);
-      // The second policy too: the template from the app's request is reused with its key.
+      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(file.mimeType).toBe('application/pdf');
+      const pdf = await PDFDocument.load(file.body as Uint8Array);
+      expect(pdf.getPageCount()).toBe(2); // one page per image the app received
+    });
+
+    it('names the refusal when a policy the app did not fetch is refused', async () => {
+      appFetches = [['1111', 'WA-AA']];
+      await logIn();
+      await adapter.listDocuments(page);
+      await expect(adapter.fetchDocument(page, 'idcard-2')).rejects.toMatchObject({
+        code: 'CARRIER_PAGE_CHANGED',
+        message: "document 401; app's own none",
+      });
+    });
+
+    it('fetches a policy the app did not fetch with our own request, where accepted', async () => {
+      appFetches = [['1111', 'WA-AA']];
+      signed = false;
+      await logIn();
+      await adapter.listDocuments(page);
       const file = await adapter.fetchDocument(page, 'idcard-2');
       expect(file.mimeType).toBe('application/pdf');
       expect(
@@ -275,7 +322,10 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       handshakeBody = { sessions: [{ id: 'a' }] };
       await logIn();
       const docs = await adapter.listDocuments(page);
-      expect(docs.map((d) => [d.id, d.policyNumberMasked])).toEqual([['idcard-1', '••••1111']]);
+      expect(docs.map((d) => [d.id, d.policyNumberMasked])).toEqual([
+        ['idcard-1', '••••1111'],
+        ['idcard-2', '••••2222'],
+      ]);
       const file = await adapter.fetchDocument(page, 'idcard-1');
       expect(
         Buffer.from(file.body as Uint8Array)

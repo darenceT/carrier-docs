@@ -22,6 +22,7 @@ import {
   sortDocuments,
   step,
 } from '../shared.js';
+import { idCardFromDocuments } from './document.js';
 import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
 import { PROGRESSIVE_URLS, blockRules, selectors, type ProgressiveUrls } from './selectors.js';
 
@@ -64,6 +65,13 @@ class Watch {
   /** The handshake's shape (key names and types only) when it listed none: for the error. */
   handshakeShape?: string;
   template?: Template;
+  /**
+   * The app's own ID-card responses, by policy number: the status, and the JSON (base64 files) when it
+   * succeeded. Memory only: these are the user's documents.
+   */
+  /** The policies the app has asked for an ID card for, in order. */
+  appAsked: Policy[] = [];
+  appCards = new Map<string, { status: number; json?: unknown }>();
 }
 
 const KEEP_HEADER = /^(authorization|accept|content-type|x-[a-z0-9-]+)$/i;
@@ -231,8 +239,28 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (!this.policies.get(page)?.has(documentId)) await this.listDocuments(page);
     const policy = this.policies.get(page)?.get(documentId);
     if (!policy) throw new AppError('NOT_FOUND');
+    const w = this.watch(page);
     const template = await this.documentTemplate(page);
+    const done = (bytes: Uint8Array): DocumentContent => ({
+      mimeType: 'application/pdf',
+      filename: `progressive-${documentId}.pdf`,
+      body: bytes,
+    });
 
+    // 1. The card the app itself just fetched for this policy (opening the ID cards page makes it
+    //    ask). Proven to work on the real site, and already here: no request of ours at all.
+    const ownFor = () => w.appCards.get(policy.number);
+    if (w.appAsked.some((p) => p.number === policy.number)) {
+      await this.until(page, () => ownFor(), 10_000);
+    }
+    const own = ownFor();
+    if (own && own.status >= 200 && own.status < 300) {
+      return done(
+        await idCardFromDocuments((own.json as { documents?: unknown } | undefined)?.documents),
+      );
+    }
+
+    // 2. A policy the app didn't fetch: our own request, built from the app's.
     const url = new URL(template.url);
     url.pathname = url.pathname.replace(
       /\/policies\/[^/]+\/document/,
@@ -240,21 +268,16 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     );
     url.searchParams.set('policyInfoKey', policy.key);
     const body = JSON.stringify({ ...template.body, mimeType: 'pdf' });
-
     const res = await this.postDocument(page, url.href, template.headers, body);
-    if (res.status === 401) throw new AppError('SESSION_EXPIRED');
     if (res.status < 200 || res.status >= 300) {
-      throw new AppError('CARRIER_UNAVAILABLE', `document ${res.status}`);
+      // Not "session expired": the account answered a moment ago. Name what each side got.
+      throw new AppError(
+        res.status === 401 || res.status === 403 ? 'CARRIER_PAGE_CHANGED' : 'CARRIER_UNAVAILABLE',
+        `document ${res.status}; app's own ${own ? own.status : 'none'}`,
+      );
     }
-    const first = (res.json as { documents?: unknown[] } | null)?.documents?.[0];
-    if (typeof first !== 'string') throw new AppError('CARRIER_PAGE_CHANGED', 'document shape');
-    const bytes = new Uint8Array(Buffer.from(first, 'base64'));
-    if (Buffer.from(bytes.subarray(0, 5)).toString('latin1') !== '%PDF-') {
-      throw new AppError('CARRIER_PAGE_CHANGED', 'document is not a PDF');
-    }
-    return { mimeType: 'application/pdf', filename: `progressive-${documentId}.pdf`, body: bytes };
+    return done(await idCardFromDocuments((res.json as { documents?: unknown } | null)?.documents));
   }
-
   /**
    * The account's policies: from the handshake the app makes on load. If it lists none we can
    * read, the app's own ID-card request names a policy too, so use that (one ID card rather than
@@ -267,9 +290,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     );
     if (seen && seen.length > 0) return seen;
     try {
-      const fromApp = policyFromDocumentUrl((await this.documentTemplate(page)).url);
+      await this.documentTemplate(page);
+      await page.waitForTimeout(500); // the page may ask for several cards in a row
+      const fromApp = w.appAsked;
       if (w.handshakePolicies) return w.handshakePolicies; // a later handshake listed them
-      if (fromApp) return [fromApp];
+      if (fromApp.length > 0) return [...fromApp];
     } catch (err) {
       if (!(err instanceof AppError) || err.code !== 'CARRIER_PAGE_CHANGED') throw err;
     }
@@ -357,7 +382,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       try {
         const body = JSON.parse(req.postData() ?? '') as unknown;
         if (body && typeof body === 'object' && (body as { type?: unknown }).type === 'idCard') {
-          w.template = { url: req.url(), headers, body: body as Record<string, unknown> };
+          w.template ??= { url: req.url(), headers, body: body as Record<string, unknown> };
+          const asked = policyFromDocumentUrl(req.url());
+          if (asked && !w.appAsked.some((p) => p.number === asked.number)) w.appAsked.push(asked);
         }
       } catch {
         // not JSON: not the request we want
@@ -382,6 +409,22 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       const found = findPolicies(body);
       if (found.length > 0) w.handshakePolicies ??= found;
       else w.handshakeShape ??= describeShape(body);
+      return;
+    }
+    // The app's own ID-card response (not ours: ours are made with fetch in the page too, but
+    // only after appCards is read, and a later one never replaces the app's).
+    const card = policyFromDocumentUrl(url);
+    if (url.startsWith(this.urls.api) && card && res.request().method() === 'POST') {
+      let type: unknown;
+      try {
+        type = (JSON.parse(res.request().postData() ?? '') as { type?: unknown }).type;
+      } catch {
+        return;
+      }
+      if (type !== 'idCard' || w.appCards.has(card.number)) return;
+      const ok = res.ok();
+      const json: unknown = ok ? await res.json().catch(() => undefined) : undefined;
+      w.appCards.set(card.number, { status: res.status(), json });
     }
   }
 
@@ -417,8 +460,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private async until<T>(
     page: Page,
     check: () => T | undefined | Promise<T | undefined>,
+    timeoutMs = this.timeout,
   ): Promise<T | null> {
-    const deadline = Date.now() + this.timeout;
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const v = await check();
       if (v !== undefined) return v;

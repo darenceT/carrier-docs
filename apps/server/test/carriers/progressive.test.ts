@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
+import { idCardFromDocuments } from '../../src/carriers/progressive/document.js';
 import { findPolicies, policyFromDocumentUrl } from '../../src/carriers/progressive/policies.js';
 import { describeShape } from '../../src/carriers/shared.js';
 
@@ -61,5 +63,31 @@ describe('describeShape', () => {
     expect(describeShape({ a: { b: { c: { d: { e: 1 } } } } })).toBe('{a:{b:{c:{d:{…}}}}}');
     const wide = Object.fromEntries('abcdefghij'.split('').map((k) => [k, 1]));
     expect(describeShape(wide)).toBe('{a:n,b:n,c:n,d:n,e:n,f:n,g:n,h:n,…}');
+  });
+});
+
+describe('idCardFromDocuments', () => {
+  const PNG_1x1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const b64 = (s: string) => Buffer.from(s, 'latin1').toString('base64');
+
+  it('returns a PDF as is', async () => {
+    const pdf = b64('%PDF-1.4\n%%EOF\n');
+    const out = await idCardFromDocuments([pdf]);
+    expect(Buffer.from(out).toString('latin1')).toBe('%PDF-1.4\n%%EOF\n');
+  });
+
+  it('turns the card images into one PDF, a page per image, skipping junk', async () => {
+    const out = await idCardFromDocuments([PNG_1x1, b64('not an image'), PNG_1x1]);
+    expect(Buffer.from(out.subarray(0, 5)).toString('latin1')).toBe('%PDF-');
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(2);
+  });
+
+  it('reports a response with no usable file as CARRIER_PAGE_CHANGED', async () => {
+    for (const bad of [undefined, [], [7], [b64('junk')]]) {
+      await expect(idCardFromDocuments(bad)).rejects.toMatchObject({
+        code: 'CARRIER_PAGE_CHANGED',
+      });
+    }
   });
 });
