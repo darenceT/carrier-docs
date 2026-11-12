@@ -26,6 +26,39 @@ export function maskPolicyNumber(policyNumber: string): string | undefined {
   return tail.length === 4 ? `••••${tail}` : undefined;
 }
 
+/**
+ * A response's shape for the logs, never its values: `{data:{items:{#:{id:n,form_url:null}}}}`.
+ * Types: s string, n number, b boolean, null; arrays show their first element as `[...]`. Keys
+ * that could be data (digits, or long) print as `#`, since some APIs key objects by policy ID.
+ */
+export function describeShape(value: unknown, depth = 4): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return depth > 0 ? `[${describeShape(value[0], depth - 1)}]` : '[…]';
+  }
+  if (typeof value === 'object') {
+    if (depth === 0) return '{…}';
+    const entries = Object.entries(value as Record<string, unknown>);
+    const shown = entries
+      .slice(0, 8)
+      .map(([k, v]) => `${/^[A-Za-z_]{1,40}$/.test(k) ? k : '#'}:${describeShape(v, depth - 1)}`);
+    if (entries.length > 8) shown.push('…');
+    return `{${shown.join(',')}}`;
+  }
+  if (typeof value === 'string') return 's';
+  if (typeof value === 'number') return 'n';
+  if (typeof value === 'boolean') return 'b';
+  return typeof value;
+}
+
+/** A string or number ID as a non-empty string, else undefined. */
+export function idString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return undefined;
+}
+
 export interface InPageResponse<T> {
   status: number;
   body: T;

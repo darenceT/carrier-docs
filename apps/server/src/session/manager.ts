@@ -792,7 +792,7 @@ function codeOf(err: unknown): ErrorCode {
  * whole under `err` at INTERNAL.
  */
 function stepOf(err: unknown): string | undefined {
-  return isAppError(err) ? err.message.slice(0, 120) : undefined;
+  return isAppError(err) ? err.message.slice(0, 400) : undefined;
 }
 
 const DRAIN_POLL_MS = 100;

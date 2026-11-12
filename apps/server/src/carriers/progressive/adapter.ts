@@ -1,6 +1,5 @@
 import type { CarrierInfo, DocumentMeta } from '@carrier-docs/contracts';
 import type { Locator, Page, Request, Response } from 'patchright';
-import { z } from 'zod';
 import {
   BlockDetector,
   snapshotPage,
@@ -14,7 +13,8 @@ import type {
   DocumentContent,
   LoginOutcome,
 } from '../../core/ports.js';
-import { maskPolicyNumber, sortDocuments, step } from '../shared.js';
+import { describeShape, maskPolicyNumber, sortDocuments, step } from '../shared.js';
+import { findPolicies, policyFromDocumentUrl, type Policy } from './policies.js';
 import { PROGRESSIVE_URLS, blockRules, selectors, type ProgressiveUrls } from './selectors.js';
 
 export const PROGRESSIVE_CARRIER: CarrierInfo = {
@@ -34,13 +34,6 @@ export interface ProgressiveAdapterOptions {
 
 const MFA_HINT = 'Progressive texted a code to the phone on your account.';
 
-/** The account handshake: one entry per policy, with the key the document API needs. */
-const handshake = z.object({
-  policySessions: z
-    .array(z.object({ policyNumber: z.string().min(1), policyInfoKey: z.string().min(1) }))
-    .min(1),
-});
-
 interface Template {
   url: string;
   headers: Record<string, string>;
@@ -58,7 +51,10 @@ class Watch {
   credentialCheck?: number;
   otpChecks: number[] = [];
   apiHeaders?: Record<string, string>;
-  handshake?: unknown;
+  /** Policies from the account handshake, once one listed any. */
+  handshakePolicies?: Policy[];
+  /** The handshake's shape (key names and types only) when it listed none: for the error. */
+  handshakeShape?: string;
   template?: Template;
 }
 
@@ -77,7 +73,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private readonly detector = new BlockDetector(blockRules);
   private readonly watches = new WeakMap<Page, Watch>();
   /** Document ID -> the policy it belongs to, per page. */
-  private readonly policies = new WeakMap<Page, Map<string, { number: string; key: string }>>();
+  private readonly policies = new WeakMap<Page, Map<string, Policy>>();
 
   constructor(options: ProgressiveAdapterOptions) {
     this.urls = { ...PROGRESSIVE_URLS, ...options.urls };
@@ -204,22 +200,18 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (!this.onApp(page) && !(await this.isSessionValid(page))) {
       throw new AppError('SESSION_EXPIRED', 'not logged in');
     }
-    const body = await this.until(page, () => w.handshake);
-    if (body === null) throw new AppError('CARRIER_UNAVAILABLE', 'account handshake');
-    const parsed = handshake.safeParse(body);
-    if (!parsed.success) throw new AppError('CARRIER_PAGE_CHANGED', 'handshake shape');
-
-    const map = new Map<string, { number: string; key: string }>();
-    const docs = parsed.data.policySessions.map((p, i): DocumentMeta => {
+    const policies = await this.accountPolicies(page, w);
+    const map = new Map<string, Policy>();
+    const docs = policies.map((p, i): DocumentMeta => {
       const id = `idcard-${i + 1}`;
-      map.set(id, { number: p.policyNumber, key: p.policyInfoKey });
+      map.set(id, p);
       const doc: DocumentMeta = {
         id,
         title: 'ID card',
         kind: 'id_card',
         mimeType: 'application/pdf',
       };
-      const masked = maskPolicyNumber(p.policyNumber);
+      const masked = maskPolicyNumber(p.number);
       if (masked) doc.policyNumberMasked = masked;
       return doc;
     });
@@ -272,6 +264,28 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     return { mimeType: 'application/pdf', filename: `progressive-${documentId}.pdf`, body: bytes };
   }
 
+  /**
+   * The account's policies: from the handshake the app makes on load. If it lists none we can
+   * read, the app's own ID-card request names a policy too, so use that (one ID card rather than
+   * none). Only when both fail is the page changed, and the error names the handshake's shape.
+   */
+  private async accountPolicies(page: Page, w: Watch): Promise<Policy[]> {
+    const seen = await this.until(
+      page,
+      () => w.handshakePolicies ?? (w.handshakeShape !== undefined ? [] : undefined),
+    );
+    if (seen && seen.length > 0) return seen;
+    try {
+      const fromApp = policyFromDocumentUrl((await this.documentTemplate(page)).url);
+      if (w.handshakePolicies) return w.handshakePolicies; // a later handshake listed them
+      if (fromApp) return [fromApp];
+    } catch (err) {
+      if (!(err instanceof AppError) || err.code !== 'CARRIER_PAGE_CHANGED') throw err;
+    }
+    if (seen === null) throw new AppError('CARRIER_UNAVAILABLE', 'account handshake');
+    throw new AppError('CARRIER_PAGE_CHANGED', `handshake shape ${w.handshakeShape ?? '?'}`);
+  }
+
   // ---------- watching the page ----------
 
   private watch(page: Page): Watch {
@@ -319,7 +333,10 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       return;
     }
     if (url.startsWith(this.urls.api) && new URL(url).pathname.endsWith('/handshake') && res.ok()) {
-      w.handshake = await res.json().catch(() => undefined);
+      const body: unknown = await res.json().catch(() => 'not JSON');
+      const found = findPolicies(body);
+      if (found.length > 0) w.handshakePolicies ??= found;
+      else w.handshakeShape ??= describeShape(body);
     }
   }
 
