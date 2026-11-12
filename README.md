@@ -68,10 +68,10 @@ npm run dev:web           # Vite on :5173, proxies /api to :3000
 
 ## Supported carriers
 
-| Carrier     | Login                        | Documents                                         | Status                         |
-| ----------- | ---------------------------- | ------------------------------------------------- | ------------------------------ |
-| Progressive | Username, password, SMS code | In-page API; the ID card PDF comes back as base64 | Login and SMS proven on Render |
-| Lemonade    | Email, then SMS code         | In-page API returns a PDF link per policy         | Login page clean on Render     |
+| Carrier     | Login                        | Documents                                         | Status                                                                            |
+| ----------- | ---------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Progressive | Username, password, SMS code | In-page API; the ID card PDF comes back as base64 | Real login from Render passed (login, SMS code, repeat run on saved cookies)      |
+| Lemonade    | Email, then SMS code         | In-page API returns a PDF link per policy         | Real login from Render passed (SMS code, policy PDF, repeat run on saved cookies) |
 
 Loom walkthrough: _link to add_.
 
@@ -87,8 +87,16 @@ reading and typing the code is excluded.
 | Progressive | _to measure_                 | _to measure_               |
 | Lemonade    | _to measure_                 | _to measure_               |
 
-So far, from the one Progressive login on Render (docs/spike.md): login page 4.8 s, credentials
-accepted 0.8 s, SMS step 0.6 s, code accepted 1.6 s.
+The table is for the app's own numbers: `GET /api/status` reports p50/p95 time to first document
+per carrier, split by full login, fast path and pre-warmed.
+
+Until those are filled in, the scripted real logins from Render (docs/spike.md, 2026-11-12) give
+the scale. These are script timings with generous waits, not the app's:
+
+| Carrier     | Login page | Credentials accepted | Code accepted | Repeat run on saved cookies |
+| ----------- | ---------- | -------------------- | ------------- | --------------------------- |
+| Progressive | 4.5 s      | 0.9 s                | 1.8 s         | account page in 6.6 s       |
+| Lemonade    | 2.4 s      | 0.7 s (SMS sent)     | 0.9 s         | 3.7 s                       |
 
 ## Anti-bot and fingerprinting
 
@@ -110,9 +118,10 @@ What the spike measured (full table in docs/spike.md):
 | Stock new headless  | true                  | clean (home)         | clean (home)           | clean (home)         |
 | patchright headless | false                 | clean (home, Render) | clean (home, Render)   | clean (home, Render) |
 
-Decisions: patchright headless, with direct egress from Render's IP. Progressive accepted the
-password and SMS code from a datacenter IP with no challenge. No residential proxy unless the
-daily canary starts seeing challenges. Lemonade's real login from Render is still to run.
+Decisions: patchright headless, with direct egress from Render's IP, for both carriers. Real
+logins from Render passed for both: the datacenter IP was accepted through login and the SMS
+code, with no block or challenge. No residential proxy unless the daily canary starts seeing
+challenges.
 
 ## Session reuse and reliability
 
@@ -157,10 +166,20 @@ npm run test:e2e          # Playwright: the Demo carrier end to end through the 
 - **Health and canary.** `GET /healthz`. A daily workflow calls `POST /internal/canary`
   (`CANARY_TOKEN`), which loads each carrier's login page through the anti-bot layer from
   Render's IP and reports clean or challenged. It never logs in.
+- **Status.** `GET /api/status` (behind the access code): per carrier, attempts, a count of each
+  outcome, the block rate, and p50/p95 time to first document. In memory, so it resets on a
+  redeploy; each login also logs one "login outcome" line.
+- **Tracing.** Every API response carries an `X-Request-Id`, which is on that request's log
+  lines; session routes also log the session ID.
 - **Config.** Every environment variable is validated at startup; the server exits listing the
   bad variable names, never their values.
-- **Shutdown.** On SIGTERM the server stops taking connections, ends live sessions with a
-  retryable error and closes the browser before exiting.
+- **Shutdown.** On SIGTERM (a redeploy) the server refuses new logins with `BUSY`, ends queued
+  ones with a retryable error, and gives logins already running up to 25 s to finish while it
+  keeps answering. Then it closes connections, the browser and the store, and exits inside
+  Render's 30 s.
+- **Browser crash.** If Chromium dies mid-session, that session fails with `CARRIER_UNAVAILABLE`
+  (retryable), the pool relaunches the browser, and the next login works. Tested by killing a
+  real browser.
 
 ## Limits and next steps
 
