@@ -63,7 +63,18 @@ export function createApp(options: AppOptions = {}): Koa {
   }
 
   if (options.webDistDir && existsSync(options.webDistDir)) {
-    app.use(serve(options.webDistDir));
+    app.use(
+      serve(options.webDistDir, {
+        // Vite's hashed bundles never change; the page that names them must be re-checked on
+        // every load, or a browser keeps running an old bundle after a deploy.
+        setHeaders: (res, filePath) => {
+          res.setHeader(
+            'Cache-Control',
+            /[\\/]assets[\\/]/.test(filePath) ? 'public, max-age=31536000, immutable' : 'no-cache',
+          );
+        },
+      }),
+    );
   }
 
   return app;

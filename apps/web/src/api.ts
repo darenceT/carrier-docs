@@ -109,8 +109,13 @@ export function createApi(fetchFn: FetchFn = (input, init) => fetch(input, init)
     if (!res.ok) throw await parseErrorResponse(res);
     // Only a JSON body is a result. A bodiless 202 still has one: Koa sends "Accepted" as text.
     if (!/\bjson\b/i.test(res.headers.get('content-type') ?? '')) return undefined as T;
-    const text = await res.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    const text = await res.text().catch(() => '');
+    try {
+      return (text ? JSON.parse(text) : undefined) as T;
+    } catch {
+      // A 2xx is a success; an unreadable body on one is not the user's error.
+      return undefined as T;
+    }
   }
 
   const sessionPath = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;

@@ -89,6 +89,14 @@ describe('createApi', () => {
     await expect(api.submitMfa('s1', { code: '123456' })).resolves.toBeUndefined();
   });
 
+  it('treats a 2xx as success even if its JSON body is unreadable', async () => {
+    const api = createApi(
+      async () =>
+        new Response('{not json', { status: 202, headers: { 'content-type': 'application/json' } }),
+    );
+    await expect(api.submitMfa('s1', { code: '123456' })).resolves.toBeUndefined();
+  });
+
   it('throws a typed ApiError from an ErrorBody', async () => {
     const api = createApi(async () =>
       jsonResponse(401, {
