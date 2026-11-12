@@ -5,6 +5,7 @@ import { runCanary, type CanaryReport } from './canary/canary.js';
 import { canaryTargets } from './canary/targets.js';
 import { createAntibot, createFingerprint, refreshFingerprint } from './antibot/index.js';
 import { DemoAdapter } from './carriers/demo/adapter.js';
+import { LemonadeAdapter } from './carriers/lemonade/adapter.js';
 import type { CarrierAdapter } from './core/ports.js';
 import { systemClock } from './infra/clock.js';
 import type { Config } from './infra/config.js';
@@ -40,7 +41,13 @@ export function createServices(config: Config, logger: Logger): Services {
 
   // The mock portal is served by this same process (see app.ts).
   const demoBaseUrl = `http://127.0.0.1:${config.port}${MOCK_PORTAL_BASE_PATH}`;
-  const adapters: CarrierAdapter<Page>[] = [];
+  // Real carriers first, so the dropdown lists them above the Demo carrier.
+  const adapters: CarrierAdapter<Page>[] = [
+    new LemonadeAdapter({
+      pacing: antibot.forCarrier('lemonade').pacing,
+      stepTimeoutMs: PAGE_ACTION_TIMEOUT_MS,
+    }),
+  ];
   if (config.demoCarrierEnabled) {
     adapters.push(
       new DemoAdapter({

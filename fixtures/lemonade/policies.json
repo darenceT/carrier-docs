@@ -1,0 +1,30 @@
+{
+  "data": {
+    "title": "Your policies",
+    "items": {
+      "LP0000FAKE01": {
+        "is_policy": true,
+        "id": "LP0000FAKE01",
+        "humanized_type": "Renters Policy",
+        "coverage_type": "renters",
+        "state": "active",
+        "address": "1 Example St, Apt 1, Exampletown, WA",
+        "form_url": "https://icebox.lemonade.com/tokens/FAKE-TOKEN-ONE"
+      },
+      "LP0000FAKE02": {
+        "is_policy": true,
+        "id": "LP0000FAKE02",
+        "humanized_type": "Renters Policy",
+        "coverage_type": "renters",
+        "state": "active",
+        "address": "2 Sample Ave, Sampleville, WA",
+        "form_url": "https://icebox.lemonade.com/tokens/FAKE-TOKEN-TWO"
+      },
+      "LP0000FAKE03": {
+        "is_policy": false,
+        "id": "LP0000FAKE03",
+        "humanized_type": "Quote"
+      }
+    }
+  }
+}
