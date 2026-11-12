@@ -44,7 +44,21 @@ export interface ProgressiveAdapterOptions {
   stepTimeoutMs?: number;
   /** Where sub-step timings go (timings and outcomes only, never values). */
   log?: StepLog;
+  /** How to ask for an ID card, if already known; otherwise learned from the first login. */
+  cardRequest?: CardRequest;
+  /** Learn it from the app's own request (default true). Off: always use the ID cards page. */
+  learnCardRequest?: boolean;
 }
+
+/** The app's ID-card request, without anything of an account: `{n}` stands for the policy number. */
+export interface CardRequest {
+  path: string;
+  body: Record<string, unknown>;
+  /** The app's API key header(s). Not a user's secret, but never logged. */
+  keys?: Record<string, string>;
+}
+
+const API_KEY = /^api[-_]?key$/i;
 
 type ClickResult = 'clicked' | 'not needed' | 'failed';
 
@@ -94,30 +108,16 @@ class Watch {
   reading: Promise<void> = Promise.resolve();
   /** The handshake answer, kept in memory to see where the card request's fields come from. */
   handshakeBody?: unknown;
-  /** The one-off check of our own card request was made (see probeOwnCardRequest). */
-  probed = false;
+  /** Requests we made ourselves ("url\nbody"): not the app's, so not watched as such. */
+  ours = new Set<string>();
+  /** Cards we asked for ourselves, by policy number (see ownCard). Memory only. */
+  ownCards = new Map<string, unknown>();
 }
 
 // What our own API requests copy from the app's: its token, its API key (the real app sends
 // `api_key`; without it our card request was refused with a 401) and its x-* headers. The
 // browser adds the rest (origin, referer, sec-*) itself.
 const KEEP_HEADER = /^(authorization|accept|content-type|api[-_]?key|x-[a-z0-9-]+)$/i;
-
-/** A value that is safe to log if it is a number, a boolean or a short word; else its shape. */
-function loggable(v: unknown): string | number | boolean {
-  if (typeof v === 'number' || typeof v === 'boolean') return v;
-  if (typeof v === 'string' && /^[A-Za-z_-]{1,24}$/.test(v)) return v;
-  return shapeOf(v);
-}
-
-/** "2026-01-15" -> "9999-99-99", "ab12" -> "aa99": what a value looks like, never the value. */
-function shapeOf(v: unknown): string {
-  if (typeof v !== 'string') return v === null ? 'null' : typeof v;
-  return v
-    .slice(0, 24)
-    .replace(/[A-Za-z]/g, 'a')
-    .replace(/[0-9]/g, '9');
-}
 
 /** Where `value` appears in `body`, as key paths ("policySessions[].term"): names only. */
 function pathsOf(body: unknown, value: unknown): string[] {
@@ -148,6 +148,9 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   private readonly pacing: Pacing;
   private readonly timeout: number;
   private readonly log: StepLog;
+  /** How the app asks for an ID card, once seen (see learnCardRequest). */
+  private learned: CardRequest | undefined;
+  private readonly learns: boolean;
   private readonly detector = new BlockDetector(blockRules);
   private readonly watches = new WeakMap<Page, Watch>();
   /** Document ID -> the policy it belongs to, per page. */
@@ -157,6 +160,8 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
 
   constructor(options: ProgressiveAdapterOptions) {
     this.log = options.log ?? (() => undefined);
+    this.learned = options.cardRequest;
+    this.learns = options.learnCardRequest ?? true;
     this.urls = { ...PROGRESSIVE_URLS, ...options.urls };
     this.pacing = options.pacing;
     this.timeout = options.stepTimeoutMs ?? 30_000;
@@ -346,11 +351,35 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     // Opening the ID cards page makes the app fetch each card (as images). Start that now, while
     // the account's handshake (the policy list) is still coming: the two took 4.4 s and 5.5 s
     // one after the other. A failure here is reported by the await below.
-    const cardsPage = this.documentTemplate(page);
-    cardsPage.catch(() => undefined);
+    // Not when we already know how to ask for a card ourselves: then the page isn't needed.
+    let cardsPage = this.learned ? undefined : this.documentTemplate(page);
+    cardsPage?.catch(() => undefined);
     const policies = await this.accountPolicies(page, w);
     this.log('progressive policies', { count: policies.length, ms: t() });
     const map = new Map<string, Policy>();
+
+    // The fast route: our own request for the first card, as a PDF, the moment the policy list
+    // is here. One document per policy; the other cards are asked for when they are opened.
+    const firstPolicy = policies[0];
+    const firstCard = firstPolicy ? await this.ownCard(page, w, firstPolicy) : undefined;
+    if (firstCard !== undefined) {
+      const docs = policies.map((p, i): DocumentMeta => {
+        const id = `idcard-${i + 1}`;
+        map.set(id, p);
+        const masked = maskPolicyNumber(p.number);
+        return {
+          id,
+          title: 'ID card',
+          kind: 'id_card',
+          mimeType: i === 0 ? cardFile(firstCard).mimeType : 'application/pdf',
+          ...(masked ? { policyNumberMasked: masked } : {}),
+        };
+      });
+      this.policies.set(page, map);
+      return sortDocuments(docs);
+    }
+    // Otherwise through the ID cards page, as the app does it.
+    cardsPage ??= this.documentTemplate(page);
     // Each image is its own document, served as it came: no conversion. The list waits for the
     // cards so it knows how many there are; the first document needs the first card anyway.
     await cardsPage;
@@ -402,8 +431,6 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     const policy = this.policies.get(page)?.get(cardId);
     if (!policy) throw new AppError('NOT_FOUND');
     const file = cardFile(await this.cardResponse(page, policy), index);
-    // Off the headline path: only once the first document is out (a later image is being fetched).
-    if (index > 0) await this.probeOwnCardRequest(page);
     const suffix = index === 0 ? '' : `-${index + 1}`;
     return {
       mimeType: file.mimeType,
@@ -419,6 +446,11 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
    */
   private async cardResponse(page: Page, policy: Policy): Promise<unknown> {
     const w = this.watch(page);
+    // Our own request, when we know how to make it and the page hasn't fetched this card itself.
+    if (!w.appAsked.some((p) => p.number === policy.number)) {
+      const mine = await this.ownCard(page, w, policy);
+      if (mine !== undefined) return mine;
+    }
     const t = timer();
     const template = await this.documentTemplate(page);
     const ownFor = () => w.appCards.get(policy.number);
@@ -496,55 +528,87 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
   }
 
   /**
-   * A one-off check per page, to decide whether to stop clicking through the ID cards page: does
-   * Progressive accept our own copy of the app's card request (now carrying its api_key), asked
-   * as a PDF? Also logs how the app fills the request, so we could build it without the app's:
-   * plain enums as they are, anything else as a shape, and where policyTerm appears in the
-   * handshake. Statuses, counts and names only; never a document or an identifier.
+   * Remember how the app asks for an ID card, so later logins can ask themselves as soon as the
+   * policy list arrives (a real login: 1.2 s, against ~6 s for the "ID cards" link plus the
+   * page's own request). Kept only if nothing in it belongs to an account: every field must be a
+   * boolean, a number, a short word, a few digits (dpi) or empty, and no string may appear in
+   * the account's handshake. Shared by all logins of this process; memory only.
    */
-  private async probeOwnCardRequest(page: Page): Promise<void> {
-    const w = this.watch(page);
-    if (w.probed || !w.template) return;
-    w.probed = true;
+  private learnCardRequest(
+    w: Watch,
+    url: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+  ): void {
+    if (this.learned || !this.learns) return;
+    const generic = (v: unknown): boolean =>
+      v === null ||
+      typeof v === 'boolean' ||
+      typeof v === 'number' ||
+      (typeof v === 'string' &&
+        /^([A-Za-z_-]{1,24}|[0-9]{1,4})$/.test(v) &&
+        pathsOf(w.handshakeBody, v).length === 0) ||
+      (Array.isArray(v) && v.length === 0) ||
+      (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0);
+    const specific = Object.entries(body)
+      .filter(([, v]) => !generic(v))
+      .map(([k]) => k);
+    const path = new URL(url).pathname.replace(
+      /\/policies\/[^/]+\/document/,
+      '/policies/{n}/document',
+    );
+    if (specific.length > 0 || !path.includes('{n}')) {
+      this.log('progressive card request not learned', { fields: specific.sort().join(' ') });
+      return;
+    }
+    // The app's API key goes with it: the gateway's key, the same for every visitor, and not
+    // necessarily on the request our token is read from. Memory only, never logged.
+    const keys = Object.fromEntries(Object.entries(headers).filter(([k]) => API_KEY.test(k)));
+    this.learned = { path, body: { ...body }, keys };
+    // Every value passed the check above: settings, no identifiers.
+    this.log('progressive card request learned', { path, body: JSON.stringify(body) });
+  }
+
+  /**
+   * Ask for a policy's ID card ourselves, as a PDF, with the request learned from the app and
+   * this page's own token and API key. Undefined if we can't (nothing learned yet, no token, or
+   * Progressive refuses): the caller then goes through the ID cards page as before.
+   */
+  private async ownCard(page: Page, w: Watch, policy: Policy): Promise<unknown> {
+    const have = w.ownCards.get(policy.number);
+    if (have !== undefined) return have;
+    const learned = this.learned;
+    if (!learned) return undefined;
+    const headers = await this.until(page, () => w.apiHeaders, 2_000);
+    if (!headers) return undefined;
     const t = timer();
-    const b = w.template.body;
-    const fields = {
-      type: loggable(b.type),
-      appMimeType: loggable(b.mimeType),
-      format: loggable(b.format),
-      dpi: loggable(b.dpi),
-      replacementVehicles: loggable(b.replacementVehicles),
-      policyTermShape: shapeOf(b.policyTerm),
-      policyTermInHandshake: pathsOf(w.handshakeBody, b.policyTerm).join(' ') || 'not found',
-    };
+    const url = new URL(
+      learned.path.replace('{n}', encodeURIComponent(policy.number)),
+      this.urls.api,
+    );
+    url.searchParams.set('policyInfoKey', policy.key);
+    let status = 0;
+    let files = 0;
     try {
       const res = await this.postDocument(
         page,
-        w.template.url,
-        w.template.headers,
-        JSON.stringify({ ...b, mimeType: 'pdf' }),
+        url.href,
+        { ...learned.keys, ...headers, 'content-type': 'application/json' },
+        JSON.stringify({ ...learned.body, mimeType: 'pdf' }),
       );
+      status = res.status;
       const documents = (res.json as { documents?: unknown } | null)?.documents;
-      let fileType = 'none';
-      try {
-        fileType = cardFile(documents).mimeType;
-      } catch {
-        // no usable file: the status says why
+      files = cardFiles(documents).length;
+      if (status >= 200 && status < 300 && files > 0) {
+        cardFile(documents); // a PDF or an image, or it throws
+        w.ownCards.set(policy.number, documents);
+        return documents;
       }
-      this.log('progressive own card request', {
-        ...fields,
-        status: res.status,
-        files: cardFiles(documents).length,
-        fileType,
-        ms: t(),
-      });
-    } catch (err) {
-      this.log('progressive own card request', {
-        ...fields,
-        status: 0,
-        error: err instanceof AppError ? err.message.slice(0, 120) : 'failed',
-        ms: t(),
-      });
+      return undefined;
+    } catch {
+      return undefined;
+    } finally {
+      this.log('progressive own card request', { status, files, ms: t() });
     }
   }
 
@@ -561,6 +625,8 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     headers: Record<string, string>,
     body: string,
   ): Promise<{ status: number; json: unknown }> {
+    // Marked as ours, so the page watcher doesn't take it for the app's own request.
+    this.watch(page).ours.add(`${url}\n${body}`);
     const failures: string[] = [];
     for (const credentials of ['same-origin', 'include'] as const) {
       try {
@@ -626,6 +692,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (headers.authorization) w.apiHeaders = headers;
     // The app's own ID-card request: the template for ours (its field values aren't documented).
     if (
+      !w.ours.has(`${req.url()}\n${req.postData() ?? ''}`) &&
       req.method() === 'POST' &&
       /\/policies\/[^/]+\/document/.test(new URL(req.url()).pathname)
     ) {
@@ -643,6 +710,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
             });
           }
           w.template ??= { url: req.url(), headers, body: body as Record<string, unknown> };
+          this.learnCardRequest(w, req.url(), headers, body as Record<string, unknown>);
           const asked = policyFromDocumentUrl(req.url());
           if (asked && !w.appAsked.some((p) => p.number === asked.number)) w.appAsked.push(asked);
           w.changed.notify();
@@ -683,6 +751,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     // The app's own ID-card response (not ours: ours are made with fetch in the page too, but
     // only after appCards is read, and a later one never replaces the app's).
     const card = policyFromDocumentUrl(url);
+    if (w.ours.has(`${url}\n${res.request().postData() ?? ''}`)) return;
     if (url.startsWith(this.urls.api) && card && res.request().method() === 'POST') {
       let type: unknown;
       try {

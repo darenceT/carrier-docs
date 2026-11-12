@@ -97,7 +97,7 @@ const idCardsPage = (
 for (const [n, key] of ${JSON.stringify(policies)}) {
   fetch('__API__/v1/policies/' + n + '/document?policyInfoKey=' + key, { method: 'POST',
     headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'x-prg-signature': 'sig:png', api_key: 'app-key', 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
+    body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: '200', policyTerm: '__TERM__', replacementVehicles: [] }) });
 }
 </script></body></html>`;
 /** Which policies the app fetches cards for on that page. */
@@ -119,6 +119,10 @@ const logs: Record<string, unknown>[] = [];
  * the app's request with another mimeType is refused (401). Off: the copy is accepted.
  */
 let signed = true;
+/** What the app sends as policyTerm: a plain word on the real site. */
+let appPolicyTerm = 'current';
+/** How often the ID cards page was loaded. */
+let idCardsHits = 0;
 /** The app sends the account home to its session-timeout page. */
 let timesOut = false;
 /** After the password, the flow first asks how to send the code. */
@@ -220,11 +224,11 @@ function createPortal(): http.Server {
           res.writeHead(302, { location: '/access/login' });
           return res.end();
         }
-        return html(
-          url.pathname === '/app/id-cards'
-            ? idCardsPage(appFetches)
-            : APP_HOME.replace('__EARLY__', earlyLink ? ID_CARDS_LINK : ''),
-        );
+        if (url.pathname === '/app/id-cards') {
+          idCardsHits += 1;
+          return html(idCardsPage(appFetches).replace('__TERM__', appPolicyTerm));
+        }
+        return html(APP_HOME.replace('__EARLY__', earlyLink ? ID_CARDS_LINK : ''));
       }
       if (url.pathname.startsWith('/policypro/')) {
         if (req.method === 'OPTIONS') {
@@ -243,7 +247,7 @@ function createPortal(): http.Server {
           apiEvents.push('card asked');
           const b = await readBody(req);
           // The fields we don't know the meaning of must be copied from the app's request.
-          if (b.type !== 'idCard' || b.policyTerm !== 'T1' || b.dpi !== 96) {
+          if (b.type !== 'idCard' || b.policyTerm !== appPolicyTerm || b.dpi !== '200') {
             return json(400, { error: 'bad request' });
           }
           if (!url.searchParams.get('policyInfoKey')) return json(400, { error: 'no key' });
@@ -271,7 +275,8 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     let server: http.Server;
     let browser: TestBrowser;
     let adapter: ProgressiveAdapter;
-    let makeAdapter: () => ProgressiveAdapter;
+    /** `learn`: remember the app's card request and ask ourselves from the next login on. */
+    let makeAdapter: (learn?: boolean) => ProgressiveAdapter;
     let sharedAdapter: ProgressiveAdapter;
     let context: BrowserContext;
     let page: Page;
@@ -282,8 +287,9 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       const port = (server.address() as AddressInfo).port;
       const base = `http://127.0.0.1:${port}`;
       apiBase = `http://localhost:${port}/policypro`;
-      makeAdapter = () =>
+      makeAdapter = (learnCardRequest = false) =>
         new ProgressiveAdapter({
+          learnCardRequest,
           pacing: noPacing,
           stepTimeoutMs: 5_000,
           urls: {
@@ -320,6 +326,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       earlyLink = false;
       apiEvents = [];
       signed = true;
+      appPolicyTerm = 'current';
       autoSubmit = false;
       askChannel = false;
       timesOut = false;
@@ -477,52 +484,97 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(Date.now() - started).toBeLessThan(3_000); // was 3 x the step timeout
     });
 
-    it('checks once, off the headline path, whether our own card request is accepted', async () => {
-      signed = false; // an API that needs the key but no signature
-      await logIn();
-      await adapter.listDocuments(page);
-      await adapter.fetchDocument(page, 'idcard-1');
-      expect(logs.some((l) => l.msg === 'progressive own card request')).toBe(false);
-      await adapter.fetchDocument(page, 'idcard-1-image2');
-      await adapter.fetchDocument(page, 'idcard-2-image2');
-      const probes = logs.filter((l) => l.msg === 'progressive own card request');
-      expect(probes).toHaveLength(1);
-      expect(probes[0]).toMatchObject({
-        status: 200,
-        files: 1,
-        fileType: 'application/pdf',
+    /** A full login on a fresh browser session with `a`; returns its page. */
+    const freshLogin = async (a: ProgressiveAdapter) => {
+      const ctx = (await browser.newContext()) as unknown as BrowserContext;
+      const p = await ctx.newPage();
+      await a.openLogin(p);
+      await a.login(p, { username: USER, password: PASS });
+      expect(await a.submitMfa(p, CODE)).toEqual({ kind: 'ok' });
+      return { ctx, p };
+    };
+
+    it('after one login showed how the app asks, later logins ask for the card PDF themselves', async () => {
+      signed = false; // like the real API: it needs the key, not a signature
+      const learner = makeAdapter(true);
+      const first = await freshLogin(learner);
+      // The first login goes through the ID cards page (images) and learns the request.
+      expect((await learner.listDocuments(first.p)).map((d) => d.mimeType)).toContain('image/png');
+      await first.ctx.close();
+      const learnedLine = logs.find((l) => l.msg === 'progressive card request learned');
+      expect(learnedLine).toMatchObject({ path: '/policypro/v1/policies/{n}/document' });
+      expect(JSON.parse(String(learnedLine?.body))).toEqual({
         type: 'idCard',
-        appMimeType: 'png',
+        mimeType: 'png',
         format: 'electronic',
-        dpi: 96,
-        replacementVehicles: false,
-        policyTermShape: 'a9',
-        policyTermInHandshake: 'policySessions[].term',
+        dpi: '200',
+        policyTerm: 'current',
+        replacementVehicles: [],
       });
-      // Names, statuses and shapes only: no policy number, key, token or file content.
+
+      const hits = idCardsHits;
+      const second = await freshLogin(learner);
+      const docs = await learner.listDocuments(second.p);
+      expect(docs.map((d) => [d.id, d.title, d.mimeType, d.policyNumberMasked])).toEqual([
+        ['idcard-1', 'ID card', 'application/pdf', '••••1111'],
+        ['idcard-2', 'ID card', 'application/pdf', '••••2222'],
+      ]);
+      for (const id of ['idcard-1', 'idcard-2']) {
+        const file = await learner.fetchDocument(second.p, id);
+        expect(file.mimeType).toBe('application/pdf');
+        expect(Buffer.from(file.body as Uint8Array).toString('base64')).toBe(PDF_B64);
+      }
+      expect(idCardsHits).toBe(hits); // the ID cards page was never opened
+      await second.ctx.close();
+      // Settings, statuses and timings only: no policy number, key, token or file content.
       const text = JSON.stringify(logs);
-      for (const secret of [
-        '1111',
-        '2222',
-        'WA-AA',
-        'fake-token',
-        'app-key',
-        PNG_B64.slice(0, 20),
-      ]) {
+      for (const secret of ['1111', '2222', 'WA-AA', 'fake-token', 'app-key', PDF_B64]) {
         expect(text).not.toContain(secret);
       }
-    });
+    }, 20_000);
 
-    it('reports a refused own request without failing the document', async () => {
-      await logIn(); // signed: a copy with another mimeType is refused
-      await adapter.listDocuments(page);
-      const file = await adapter.fetchDocument(page, 'idcard-1-image2');
+    it('goes back to the ID cards page if our own request is refused', async () => {
+      signed = false;
+      const learner = makeAdapter(true);
+      const first = await freshLogin(learner);
+      await learner.listDocuments(first.p);
+      await first.ctx.close();
+
+      signed = true; // now a copy of the app's request is refused (401)
+      const second = await freshLogin(learner);
+      const docs = await learner.listDocuments(second.p);
+      expect(docs.map((d) => d.id)).toEqual([
+        'idcard-1',
+        'idcard-1-image2',
+        'idcard-2',
+        'idcard-2-image2',
+      ]);
+      const file = await learner.fetchDocument(second.p, 'idcard-1');
       expect(file.mimeType).toBe('image/png');
-      expect(logs.find((l) => l.msg === 'progressive own card request')).toMatchObject({
-        status: 401,
-        fileType: 'none',
+      expect(logs.some((l) => l.msg === 'progressive own card request' && l.status === 401)).toBe(
+        true,
+      );
+      await second.ctx.close();
+    }, 20_000);
+
+    it('does not learn a request that carries something of the account', async () => {
+      signed = false;
+      appPolicyTerm = 'T2026A'; // not a plain word: could be an account's own term
+      const learner = makeAdapter(true);
+      const first = await freshLogin(learner);
+      await learner.listDocuments(first.p);
+      await first.ctx.close();
+      expect(logs.find((l) => l.msg === 'progressive card request not learned')).toMatchObject({
+        fields: 'policyTerm',
       });
-    });
+      expect(JSON.stringify(logs)).not.toContain('T2026A');
+
+      const hits = idCardsHits;
+      const second = await freshLogin(learner);
+      expect((await learner.listDocuments(second.p))[0]?.mimeType).toBe('image/png');
+      expect(idCardsHits).toBeGreaterThan(hits); // still through the ID cards page
+      await second.ctx.close();
+    }, 20_000);
 
     it('asks again after a wrong code', async () => {
       await adapter.openLogin(page);
