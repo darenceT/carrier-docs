@@ -45,7 +45,13 @@ describe('parsePolicies (Lemonade)', () => {
   });
 
   it('reports a changed response shape as CARRIER_PAGE_CHANGED', () => {
-    for (const bad of [null, {}, { data: {} }, { data: { items: [] } }]) {
+    for (const bad of [
+      null,
+      {},
+      { data: {} },
+      { data: { items: 'x' } },
+      { data: { items: [7] } },
+    ]) {
       try {
         parsePolicies(bad);
         expect.unreachable();
@@ -53,6 +59,47 @@ describe('parsePolicies (Lemonade)', () => {
         expect(err).toBeInstanceOf(AppError);
         expect((err as AppError).code).toBe('CARRIER_PAGE_CHANGED');
       }
+    }
+  });
+
+  it('reads tolerantly: numeric ids, null fields, an array of items, one bad item', () => {
+    const { documents, links } = parsePolicies({
+      data: {
+        items: [
+          {
+            id: 12345678,
+            humanized_type: null,
+            address: null,
+            form_url: 'https://icebox.example/a',
+          },
+          { id: 'LP2', form_url: null },
+          'not an item',
+          { id: 'LP0000FAKE03', humanized_type: 'Renters', form_url: 'https://icebox.example/c' },
+        ],
+      },
+    });
+    expect(documents.map((d) => [d.id, d.title, d.policyNumberMasked])).toEqual([
+      ['policy-1', 'Policy', '••••5678'],
+      ['policy-2', 'Renters', '••••KE03'],
+    ]);
+    expect(links.get('policy-2')).toBe('https://icebox.example/c');
+  });
+
+  it('returns no documents for an account with no policies', () => {
+    expect(parsePolicies({ data: { items: {} } }).documents).toEqual([]);
+    expect(parsePolicies({ data: { items: [] } }).documents).toEqual([]);
+  });
+
+  it('names the changed shape in the error, without any values or ID-like keys', () => {
+    try {
+      parsePolicies({
+        data: { policies: { LP0000FAKE01: { id: 'LP0000FAKE01', url: 'https://x' } } },
+      });
+      expect.unreachable();
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toBe('policies shape {data:{policies:{#:{id:s,url:s}}}}');
+      expect(msg).not.toContain('LP0000');
     }
   });
 });

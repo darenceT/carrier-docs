@@ -74,6 +74,15 @@ fetch('/policypro/v1/policies/1111/document?policyInfoKey=WA-AA', { method: 'POS
   body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: 96, policyTerm: 'T1', replacementVehicles: false }) });
 </script></body></html>`;
 
+const SPIKE_HANDSHAKE = {
+  policySessions: [
+    { policyNumber: '1111', policySessionId: 'a', policyInfoKey: 'WA-AA' },
+    { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA' },
+  ],
+};
+/** What the imitation's handshake returns; tests swap it to imitate a changed response. */
+let handshakeBody: unknown = SPIKE_HANDSHAKE;
+
 function loggedIn(req: http.IncomingMessage): boolean {
   return /(^|;\s*)pf=ok/.test(req.headers.cookie ?? '');
 }
@@ -142,12 +151,7 @@ function createPortal(): http.Server {
         }
         if (req.headers.authorization !== TOKEN) return json(401, { error: 'unauthorized' });
         if (url.pathname === '/policypro/v1/handshake') {
-          return json(200, {
-            policySessions: [
-              { policyNumber: '1111', policySessionId: 'a', policyInfoKey: 'WA-AA' },
-              { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA' },
-            ],
-          });
+          return json(200, handshakeBody);
         }
         const m = /^\/policypro\/v1\/policies\/(\d+)\/document$/.exec(url.pathname);
         if (m && req.method === 'POST') {
@@ -209,6 +213,7 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
     });
 
     afterEach(async () => {
+      handshakeBody = SPIKE_HANDSHAKE;
       await context.close();
     });
 
@@ -230,6 +235,30 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       // The second policy too: the template from the app's request is reused with its key.
       const file = await adapter.fetchDocument(page, 'idcard-2');
       expect(file.mimeType).toBe('application/pdf');
+      expect(
+        Buffer.from(file.body as Uint8Array)
+          .subarray(0, 5)
+          .toString('latin1'),
+      ).toBe('%PDF-');
+    });
+
+    it('reads a handshake shaped differently (nested, numeric policy numbers)', async () => {
+      handshakeBody = {
+        account: { policies: [{ summary: { policyNumber: 1111, policyInfoKey: 'WA-AA' } }] },
+      };
+      await logIn();
+      const docs = await adapter.listDocuments(page);
+      expect(docs.map((d) => d.policyNumberMasked)).toEqual(['••••1111']);
+      const file = await adapter.fetchDocument(page, 'idcard-1');
+      expect(file.mimeType).toBe('application/pdf');
+    });
+
+    it('falls back to the app’s own ID-card request when the handshake lists no policies', async () => {
+      handshakeBody = { sessions: [{ id: 'a' }] };
+      await logIn();
+      const docs = await adapter.listDocuments(page);
+      expect(docs.map((d) => [d.id, d.policyNumberMasked])).toEqual([['idcard-1', '••••1111']]);
+      const file = await adapter.fetchDocument(page, 'idcard-1');
       expect(
         Buffer.from(file.body as Uint8Array)
           .subarray(0, 5)
