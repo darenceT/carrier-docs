@@ -35,6 +35,17 @@ describe('loadConfig', () => {
     expect(c.browserStrategy.carrier2).toBe('patched-headed');
   });
 
+  it('canary loads only the mock portal unless real carriers are listed', () => {
+    expect(loadConfig(validEnv()).canaryCarriers).toEqual(['demo']);
+    expect(
+      loadConfig({ ...validEnv(), CANARY_CARRIERS: 'progressive, lemonade,progressive' })
+        .canaryCarriers,
+    ).toEqual(['progressive', 'lemonade']);
+    expect(() => loadConfig({ ...validEnv(), CANARY_CARRIERS: 'demo,acme' })).toThrow(
+      /CANARY_CARRIERS/,
+    );
+  });
+
   it('treats empty strings as unset', () => {
     expect(loadConfig({ ...validEnv(), MAX_SESSIONS: '' }).maxSessions).toBe(1);
   });

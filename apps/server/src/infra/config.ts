@@ -14,6 +14,20 @@ const base64Key32 = z.string().refine(isValidSessionKey, {
   message: 'must be 32 random bytes encoded as base64 (44 characters)',
 });
 
+/** Carriers whose login page the canary may open. Real carriers are opt-in (render.yaml). */
+export const CANARY_CARRIERS = ['demo', 'progressive', 'lemonade'] as const;
+export type CanaryCarrier = (typeof CANARY_CARRIERS)[number];
+
+const carrierList = z
+  .string()
+  .transform((v) =>
+    v
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+  )
+  .pipe(z.array(z.enum(CANARY_CARRIERS)));
+
 const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
 const schema = z.object({
@@ -33,6 +47,8 @@ const schema = z.object({
   DEMO_CARRIER_ENABLED: bool.default(false),
   PROGRESSIVE_BROWSER: z.enum(BROWSER_STRATEGIES).default('patched-headless'),
   CARRIER2_BROWSER: z.enum(BROWSER_STRATEGIES).default('patched-headless'),
+  // Local runs and tests only ever load the mock portal; Render lists the real carriers.
+  CANARY_CARRIERS: carrierList.default(['demo']),
   EGRESS_PROXY_URL: z.url().optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
@@ -46,6 +62,8 @@ export interface Config {
   sessionKey: string;
   accessCode: string;
   canaryToken: string;
+  /** Login pages the canary loads (never logs in). */
+  canaryCarriers: CanaryCarrier[];
   maxSessions: number;
   /** How long a login waits in line for a free browser slot. */
   queueWaitMs: number;
@@ -88,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionKey: c.SESSION_KEY,
     accessCode: c.ACCESS_CODE,
     canaryToken: c.CANARY_TOKEN,
+    canaryCarriers: [...new Set(c.CANARY_CARRIERS)],
     maxSessions: c.MAX_SESSIONS,
     queueWaitMs: c.QUEUE_WAIT_S * 1000,
     documentCacheMs: c.DOCUMENT_CACHE_S * 1000,

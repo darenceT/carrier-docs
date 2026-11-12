@@ -24,6 +24,7 @@ const services = createServices(config, logger);
 const app = createApp({
   webDistDir,
   mockPortal: config.demoCarrierEnabled,
+  canary: { token: config.canaryToken, run: () => services.runCanary() },
   api: {
     sessions: services.sessions,
     accessCode: config.accessCode,
