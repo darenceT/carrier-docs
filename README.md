@@ -77,10 +77,12 @@ Loom walkthrough: _link to add_.
 
 ## Latency
 
-**Target:** login to first document in under 8 s. **Where it stands:** not met for a first login. A
-Progressive login with an SMS code takes about 13.5 s after the code, nearly all of it
-Progressive's own site. For a returning browser the work now starts before the user submits
-(pre-warming), which is where the target is reachable; that path is still to be measured.
+**Target:** login to first document in under 8 s. **Where it stands:**
+
+- **Returning browser (saved session, pre-warmed): met on both carriers.** Progressive 7.4 s,
+  Lemonade 3.5 s, from submit to first document, with no password and no code.
+- **First login with an SMS code: met on Lemonade** (7.2 s after the code), **not on
+  Progressive** (13.4 s after the code, nearly all of it Progressive's own site).
 
 ### What is measured
 
@@ -95,17 +97,22 @@ Progressive's own site. For a returning browser the work now starts before the u
 
 ### Measured
 
-| Path                                           | Before the code | After the code | Notes                                 |
-| ---------------------------------------------- | --------------- | -------------- | ------------------------------------- |
-| Progressive, full login (password + SMS code)  | 3.2 s           | 13.5 s         | Four runs: 13.5 to 14.7 s             |
-| Progressive, saved session (no password, code) | n/a             | 14.0 s total   | Skips login and code; same page loads |
-| Lemonade, full login (email + SMS code)        | 5.6 s           | 11.2 s         | One run, before the login speed-ups   |
-| Lemonade, saved session                        | n/a             | _to measure_   | 3.7 s in the scripted spike run       |
-| Saved session, pre-warmed at carrier selection | n/a             | _to measure_   | See "What is free" below              |
+| Path                                           | Before the code | After the code  | Notes                                               |
+| ---------------------------------------------- | --------------- | --------------- | --------------------------------------------------- |
+| Progressive, first login (password + SMS code) | 3.2 s           | 13.4 s          | Five runs: 13.4 to 14.7 s                           |
+| Progressive, saved session, pre-warmed         | n/a             | **7.4 s** total | Submitted 6 s after picking the carrier             |
+| Progressive, saved session, not pre-warmed     | n/a             | 14.0 s total    | Before the saved-session pre-warm existed           |
+| Lemonade, first login (email + SMS code)       | 5.6 s           | **7.2 s**       | 13.3 s before the code when the pre-warm was unused |
+| Lemonade, saved session, pre-warmed            | n/a             | **3.5 s** total | Submitted 6.5 s after picking the carrier           |
 
-Still to re-measure: four later changes (overlapping the policy list with the ID cards page,
-event-driven waits, one fewer Lemonade policy call, and the saved-session pre-warm) merged after
-these runs.
+Notes on reading these:
+
+- **A pre-warmed run depends on the head start.** The server starts when the carrier is picked;
+  both runs above had only about 6 s before submit. With more typing time the documents are
+  ready at submit. With none, the run takes as long as "not pre-warmed".
+- **One Lemonade first login took 13.3 s before the code** because its pre-warmed login page was
+  not used (expired or failed; not yet diagnosed), so the page loaded from scratch after submit.
+  With the pre-warm used, that step measured 5.6 s.
 
 ### Where the time goes (Progressive, after the code: 13.5 s)
 
@@ -157,8 +164,8 @@ Tried and removed, because measurement said so:
   skips the password and the code (26.5 s end to end became 14.0 s on Progressive).
 - **Saved-session pre-warm.** For a returning browser, picking the carrier opens the saved
   session, checks it and fetches the document list and first document ahead. They are released
-  only when a login with the same username arrives. With 15 s between picking the carrier and
-  submitting, the documents can be ready at submit. _To measure on Render._
+  only when a login with the same username arrives. Measured on Render: Progressive 14.0 s
+  became 7.4 s, and Lemonade took 3.5 s, each with about 6 s of head start.
 
 ### What would cost money
 
@@ -171,8 +178,14 @@ Tried and removed, because measurement said so:
 ### Why a first Progressive login cannot reach 8 s here
 
 Progressive's own steps after the code add up to about 13 s on this instance, and about 5 s of
-that is their servers answering, which no hosting change removes. The target is reachable where
-the work can start early: the pre-warmed saved session.
+that is their servers answering, which no hosting change removes. The target is met where the
+work can start early: the pre-warmed saved session (7.4 s).
+
+One lever is still open for the first login: asking for the ID card with our own request as
+soon as the policy list arrives, instead of waiting for the "ID cards" link and the page's own
+request (about 5 s together). Our earlier copy of that request was refused; a real login showed
+it had dropped the app's `api_key` header. Whether Progressive accepts it with the key is being
+checked; if so, the estimate is about 3 s saved.
 
 ## Anti-bot and fingerprinting
 
