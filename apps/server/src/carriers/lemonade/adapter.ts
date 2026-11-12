@@ -51,6 +51,11 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
   private readonly detector = new BlockDetector(blockRules);
   /** PDF links from the last listing, per page (the adapter is shared by every session). */
   private readonly links = new WeakMap<Page, Map<string, string>>();
+  /**
+   * The policies the saved-session check just loaded, per page, for the listing that follows it:
+   * a repeat run then asks Lemonade once, not twice. Used once, then dropped (the links expire).
+   */
+  private readonly checked = new WeakMap<Page, unknown>();
 
   constructor(options: LemonadeAdapterOptions) {
     this.urls = { ...LEMONADE_URLS, ...options.urls };
@@ -122,7 +127,7 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
     await this.goto(page, this.urls.appHome);
     if (!this.onApp(page)) return false; // redirected to the login page
     try {
-      await this.loadPolicies(page);
+      this.checked.set(page, await this.loadPolicies(page));
       return true;
     } catch (err) {
       if (err instanceof AppError && err.code === 'SESSION_EXPIRED') return false;
@@ -133,8 +138,15 @@ export class LemonadeAdapter implements CarrierAdapter<Page> {
   async listDocuments(page: Page): Promise<DocumentMeta[]> {
     const started = Date.now();
     const onApp = this.onApp(page);
-    const { documents, links } = parsePolicies(await this.loadPolicies(page));
-    this.log('lemonade policies', { onApp, count: documents.length, ms: Date.now() - started });
+    const checked = this.checked.get(page);
+    this.checked.delete(page);
+    const { documents, links } = parsePolicies(checked ?? (await this.loadPolicies(page)));
+    this.log('lemonade policies', {
+      onApp,
+      reused: checked !== undefined,
+      count: documents.length,
+      ms: Date.now() - started,
+    });
     this.links.set(page, links);
     return documents;
   }
