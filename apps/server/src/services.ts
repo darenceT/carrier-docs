@@ -1,3 +1,4 @@
+import type { StatusResponse } from '@carrier-docs/contracts';
 import { MOCK_PORTAL_BASE_PATH } from '@carrier-docs/mock-portal';
 import type { Page } from 'patchright';
 import type { Logger } from 'pino';
@@ -11,6 +12,7 @@ import { systemClock } from './infra/clock.js';
 import type { Config } from './infra/config.js';
 import { createCipher, type Cipher } from './infra/crypto.js';
 import { SessionManager, type CarrierBrowser } from './session/manager.js';
+import { SessionMetrics } from './session/metrics.js';
 import { SqliteSessionStore } from './store/sqlite-store.js';
 
 /** At most this many logins wait in line for a slot (design: Capacity). */
@@ -22,6 +24,8 @@ const PURGE_INTERVAL_MS = 60 * 60 * 1000;
 export interface Services {
   cipher: Cipher;
   sessions: SessionManager<Page>;
+  /** GET /api/status: outcome counts, block rate, time to first document. */
+  status(): StatusResponse;
   /** Loads each configured login page through the anti-bot layer; never logs in. */
   runCanary(): Promise<CanaryReport>;
   close(): Promise<void>;
@@ -66,7 +70,9 @@ export function createServices(config: Config, logger: Logger): Services {
     };
   };
 
+  const metrics = new SessionMetrics();
   const sessions = new SessionManager<Page>({
+    metrics,
     adapters,
     browserFor,
     store,
@@ -100,6 +106,7 @@ export function createServices(config: Config, logger: Logger): Services {
   return {
     cipher,
     sessions,
+    status: () => metrics.snapshot(sessions.stats()),
     runCanary: () =>
       runCanary(targets, {
         browserFor,

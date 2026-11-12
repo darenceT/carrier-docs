@@ -27,6 +27,7 @@ const app = createApp({
   canary: { token: config.canaryToken, run: () => services.runCanary() },
   api: {
     sessions: services.sessions,
+    status: () => services.status(),
     accessCode: config.accessCode,
     logger,
     secureCookies: config.env === 'production',

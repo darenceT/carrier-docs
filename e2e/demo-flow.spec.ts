@@ -147,4 +147,20 @@ test.describe('Demo carrier, end to end', () => {
     await expectDocuments(first);
     await expectDocuments(second);
   });
+
+  test('/api/status counts the runs above per carrier, with latency percentiles', async ({
+    page,
+  }) => {
+    await enter(page);
+    const res = await page.request.get('/api/status');
+    expect(res.status()).toBe(200);
+    const demo = (await res.json()).carriers.demo;
+    expect(demo.attempts).toBeGreaterThanOrEqual(9);
+    expect(demo.outcomes.done).toBeGreaterThanOrEqual(7);
+    expect(demo.outcomes.BAD_CREDENTIALS).toBeGreaterThanOrEqual(1);
+    expect(demo.outcomes.CARRIER_BLOCKED).toBeGreaterThanOrEqual(1);
+    expect(demo.blockRate).toBeGreaterThan(0);
+    expect(demo.timeToFirstDocument.fastPath.count).toBeGreaterThanOrEqual(1);
+    expect(demo.timeToFirstDocument.all.p95).toBeGreaterThan(0);
+  });
 });

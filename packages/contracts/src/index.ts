@@ -168,3 +168,39 @@ export type SessionEvent =
   | { type: 'done' };
 
 export type SessionEventType = SessionEvent['type'];
+
+// ---------- GET /api/status (behind the access code) ----------
+
+/** Percentiles over the most recent samples, in milliseconds. */
+export interface LatencySummary {
+  count: number;
+  p50?: number;
+  p95?: number;
+}
+
+export interface CarrierStatus {
+  /** Logins that reached an outcome (finished or failed) since the server started. */
+  attempts: number;
+  /** "done" or an ErrorCode -> count. */
+  outcomes: Record<string, number>;
+  /** (CARRIER_BLOCKED + CARRIER_CHALLENGE) / attempts, 0 when there are none. */
+  blockRate: number;
+  /**
+   * Time to first document, excluding the time the user took to type the MFA code. `all` covers
+   * every login; the rest split it by path and by whether a pre-warmed page was used.
+   */
+  timeToFirstDocument: {
+    all: LatencySummary;
+    fullLogin: LatencySummary;
+    fastPath: LatencySummary;
+    prewarmed: LatencySummary;
+    notPrewarmed: LatencySummary;
+  };
+}
+
+export interface StatusResponse {
+  /** When the counters started (they are in memory and reset on restart or redeploy). */
+  since: string;
+  sessions: { live: number; slotsInUse: number; waiting: number };
+  carriers: Record<string, CarrierStatus>;
+}

@@ -27,6 +27,7 @@ import {
   type SessionEvent,
   type SessionState,
 } from '../core/state-machine.js';
+import type { SessionMetrics } from './metrics.js';
 
 // ---------- what the manager needs from the browser side (structural, so tests can fake it) ----------
 
@@ -60,6 +61,8 @@ export interface SessionManagerOptions<Page> {
   createFingerprint(browserVersion: string): FingerprintProfile;
   refreshFingerprint(saved: FingerprintProfile, browserVersion: string): FingerprintProfile;
   limits: SessionLimits;
+  /** Outcome and latency counters for GET /api/status. */
+  metrics?: SessionMetrics;
 }
 
 export interface SessionLimits {
@@ -122,6 +125,14 @@ interface Live<Page> {
   timers: Set<ReturnType<typeof setTimeout>>;
   /** The failed event was sent and cleanup started. */
   ended?: boolean;
+  /** Time spent waiting for the user to type MFA codes (excluded from latency metrics). */
+  mfaWaitMs: number;
+  /** The saved session was accepted (no login, no MFA). */
+  fastPath?: boolean;
+  /** A pre-warmed login page was taken over. */
+  prewarmed?: boolean;
+  /** The outcome was counted in metrics. */
+  recorded?: boolean;
 }
 
 /**
@@ -299,6 +310,7 @@ export class SessionManager<Page> implements SessionService {
         await this.openContext(s, browser, saved.storageState);
         if (await adapter.isSessionValid(s.page!)) {
           this.apply(s, { type: 'FAST_PATH_HIT' });
+          s.fastPath = true;
           return await this.fetchDocuments(s, adapter);
         }
         await this.o.store.delete(s.reuseKey);
@@ -307,6 +319,7 @@ export class SessionManager<Page> implements SessionService {
       } else {
         if (prewarmed && (await this.takeOverPrewarm(s, prewarmed))) {
           // The pre-warmed page is already on the login form.
+          s.prewarmed = true;
         } else {
           if (prewarmed) await this.retirePrewarm(prewarmed);
           s.fingerprint = this.o.createFingerprint(await browser.browserVersion());
@@ -357,8 +370,10 @@ export class SessionManager<Page> implements SessionService {
   private waitForCode(s: Live<Page>): Promise<string | undefined> {
     const code = deferred<string | undefined>();
     s.mfaCode = code as Deferred<string>;
+    const waitStarted = this.o.clock.now();
     const timer = this.after(s, this.o.limits.mfaTimeoutMs, () => code.resolve(undefined));
     return code.promise.finally(() => {
+      s.mfaWaitMs += this.o.clock.now() - waitStarted;
       clearTimeout(timer);
       s.timers.delete(timer);
       s.mfaCode = undefined;
@@ -400,6 +415,7 @@ export class SessionManager<Page> implements SessionService {
     // Ended meanwhile ("Forget me", shutdown): it already sent failed and cleaned up.
     if (s.ended) return;
     if (canTransition(s.state, { type: 'CLOSE' })) this.apply(s, { type: 'CLOSE' });
+    this.record(s, 'done');
     this.emit(s, { type: 'done' });
     await this.closeContext(s);
     this.after(s, this.o.limits.documentCacheMs, () => this.destroy(s));
@@ -580,6 +596,7 @@ export class SessionManager<Page> implements SessionService {
       listeners: new Set(),
       cache: new Map(),
       timers: new Set(),
+      mfaWaitMs: 0,
     };
     this.sessions.set(s.id, s);
     return s;
@@ -604,11 +621,33 @@ export class SessionManager<Page> implements SessionService {
     if (s.ended || s.state.status === 'done') return;
     s.ended = true;
     if (!isTerminal(s.state)) this.apply(s, { type: 'FAIL', code, retryable });
+    this.record(s, s.state.error?.code ?? code);
     this.emit(s, this.failedEvent(s));
     this.removeWaiting(s);
     void this.closeContext(s).then(() =>
       this.after(s, this.o.limits.documentCacheMs, () => this.destroy(s)),
     );
+  }
+
+  /** Count a login's outcome once, for GET /api/status, and log it as one line. */
+  private record(s: Live<Page>, outcome: 'done' | ErrorCode): void {
+    if (s.kind !== 'login' || s.recorded) return;
+    s.recorded = true;
+    const firstDocumentMs =
+      s.firstDocumentMs === undefined ? undefined : s.firstDocumentMs - s.mfaWaitMs;
+    const fastPath = s.fastPath === true;
+    const prewarmed = s.prewarmed === true;
+    this.o.logger.info(
+      { sessionId: s.id, carrierId: s.carrierId, outcome, firstDocumentMs, fastPath, prewarmed },
+      'login outcome',
+    );
+    this.o.metrics?.record({
+      carrierId: s.carrierId,
+      outcome,
+      ...(firstDocumentMs === undefined ? {} : { firstDocumentMs }),
+      fastPath,
+      prewarmed,
+    });
   }
 
   private failFromError(s: Live<Page>, err: unknown): void {
