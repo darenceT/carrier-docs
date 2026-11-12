@@ -23,6 +23,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { noPacing } from '../../src/antibot/pacing.js';
 import { DemoAdapter } from '../../src/carriers/demo/adapter.js';
 import { AppError } from '../../src/core/errors.js';
+import { carrierContract } from './contract.js';
 
 const PASSWORD = 'demo-password';
 
@@ -173,4 +174,12 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)('DemoAdapter against the mock po
     const dead = new DemoAdapter({ baseUrl: 'http://127.0.0.1:9/demo-portal', pacing: noPacing });
     await expect(dead.openLogin(page)).rejects.toMatchObject({ code: 'CARRIER_UNAVAILABLE' });
   });
+
+  carrierContract(() => ({
+    adapter,
+    browser,
+    valid: () => ({ username: 'contract-user', password: PASSWORD }),
+    mfaCode: MOCK_PORTAL_MFA_CODE,
+    wrong: { username: MOCK_PORTAL_USERNAMES.wrongPassword, password: PASSWORD },
+  }));
 });

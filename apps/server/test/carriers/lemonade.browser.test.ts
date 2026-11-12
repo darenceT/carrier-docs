@@ -15,6 +15,7 @@ import type { BrowserContext, Page } from 'patchright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { noPacing } from '../../src/antibot/pacing.js';
 import { LemonadeAdapter } from '../../src/carriers/lemonade/adapter.js';
+import { carrierContract } from './contract.js';
 
 const CODE = '123456';
 const POLICIES_PATH = '/api/v1/web_dashboard/accounts/home/policies';
@@ -274,4 +275,12 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)('LemonadeAdapter against a local
     expect(await adapter.isSessionValid(await empty.newPage())).toBe(false);
     await empty.close();
   });
+
+  carrierContract(() => ({
+    adapter,
+    browser,
+    valid: () => ({ email: 'renter@example.com' }),
+    mfaCode: CODE,
+    wrong: { email: 'unknown@example.com' },
+  }));
 });
