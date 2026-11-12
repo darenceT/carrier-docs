@@ -128,6 +128,9 @@ interface Live<Page> {
   ended?: boolean;
   /** Time spent waiting for the user to type MFA codes (excluded from latency metrics). */
   mfaWaitMs: number;
+  /** When the latest MFA code was submitted (clock ms); the headline counts from here. */
+  codeSubmittedAt?: number;
+  afterMfaMs?: number;
   /** The saved session was accepted (no login, no MFA). */
   fastPath?: boolean;
   /** A pre-warmed login page was taken over. */
@@ -224,6 +227,7 @@ export class SessionManager<Page> implements SessionService {
     if (s.state.status !== 'mfa_required' || !s.mfaCode) {
       throw new AppError('VALIDATION_FAILED', 'not waiting for a code');
     }
+    s.codeSubmittedAt = this.o.clock.now();
     s.mfaCode.resolve(code);
   }
 
@@ -234,11 +238,7 @@ export class SessionManager<Page> implements SessionService {
     if (s.state.status === 'mfa_required' && s.lastMfa) listener(s.lastMfa);
     if (s.documents) listener({ type: 'documents_listed', documents: s.documents });
     if (s.readyDocumentId !== undefined && s.firstDocumentMs !== undefined) {
-      listener({
-        type: 'document_ready',
-        documentId: s.readyDocumentId,
-        elapsedMs: s.firstDocumentMs,
-      });
+      listener(this.documentReadyEvent(s, s.readyDocumentId));
     }
     if (s.state.status === 'failed') listener(this.failedEvent(s));
     if (s.state.status === 'done') listener({ type: 'done' });
@@ -394,6 +394,15 @@ export class SessionManager<Page> implements SessionService {
     return outcome;
   }
 
+  private documentReadyEvent(s: Live<Page>, documentId: string): WireEvent {
+    return {
+      type: 'document_ready',
+      documentId,
+      elapsedMs: s.firstDocumentMs ?? 0,
+      ...(s.afterMfaMs !== undefined && { afterMfaMs: s.afterMfaMs }),
+    };
+  }
+
   /** The next code the user submits, or undefined after MFA_TIMEOUT. */
   private waitForCode(s: Live<Page>): Promise<string | undefined> {
     const code = deferred<string | undefined>();
@@ -419,8 +428,10 @@ export class SessionManager<Page> implements SessionService {
     s.cache.set(first.id, await adapter.fetchDocument(page, first.id));
     this.apply(s, { type: 'DOCUMENT_READY' });
     s.readyDocumentId = first.id;
-    s.firstDocumentMs = this.o.clock.now() - s.startedAt;
-    this.emit(s, { type: 'document_ready', documentId: first.id, elapsedMs: s.firstDocumentMs });
+    const now = this.o.clock.now();
+    s.firstDocumentMs = now - s.startedAt;
+    if (s.codeSubmittedAt !== undefined) s.afterMfaMs = now - s.codeSubmittedAt;
+    this.emit(s, this.documentReadyEvent(s, first.id));
 
     // The rest in the background, then free the slot: the session doesn't idle on a browser.
     s.prefetch = (async () => {
@@ -677,7 +688,15 @@ export class SessionManager<Page> implements SessionService {
     const fastPath = s.fastPath === true;
     const prewarmed = s.prewarmed === true;
     this.o.logger.info(
-      { sessionId: s.id, carrierId: s.carrierId, outcome, firstDocumentMs, fastPath, prewarmed },
+      {
+        sessionId: s.id,
+        carrierId: s.carrierId,
+        outcome,
+        firstDocumentMs,
+        afterMfaMs: s.afterMfaMs,
+        fastPath,
+        prewarmed,
+      },
       'login outcome',
     );
     this.o.metrics?.record({

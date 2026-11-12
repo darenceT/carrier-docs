@@ -42,6 +42,8 @@ class FakeCarrier implements CarrierAdapter<FakePage> {
   opened = 0;
   /** Saved sessions the "carrier" still accepts. */
   readonly validSessions = new Set<string>();
+  /** How long the carrier takes to accept a code. */
+  verifyMs = 0;
   /** Hold logins until released, to test concurrency. */
   gate?: Promise<void>;
   private pending = new Map<number, string>();
@@ -65,6 +67,7 @@ class FakeCarrier implements CarrierAdapter<FakePage> {
   }
 
   async submitMfa(page: FakePage, code: string): Promise<LoginOutcome> {
+    if (this.verifyMs > 0) await new Promise((r) => setTimeout(r, this.verifyMs));
     if (code !== CODE) return { kind: 'mfa_required', rejected: true };
     page.user = this.pending.get(page.id);
     return { kind: 'ok' };
@@ -242,6 +245,29 @@ describe('SessionManager: login flows', () => {
       'document_ready',
     ]);
     expect(steps.find((t) => t.step === 'mfa_required')?.ms).toBe(4_000);
+  });
+
+  it('times the first document from the code, not counting the wait for the user', async () => {
+    carrier.verifyMs = 1_500;
+    const { sessionId, events } = await login('o1', 'alice');
+    await settle();
+    await vi.advanceTimersByTimeAsync(4_000); // the user reads their phone
+    await manager.submitMfa('o1', sessionId, CODE);
+    await vi.advanceTimersByTimeAsync(1_500); // the carrier checks the code
+    const ready = events.find((e) => e.type === 'document_ready');
+    expect(ready).toMatchObject({ elapsedMs: 5_500, afterMfaMs: 1_500 });
+
+    const late: SessionEvent[] = [];
+    manager.subscribe('o1', sessionId, (e) => late.push(e));
+    expect(late.find((e) => e.type === 'document_ready')).toMatchObject({ afterMfaMs: 1_500 });
+  });
+
+  it('without MFA there is no after-code time; the total is the headline', async () => {
+    const { events } = await login('o1', 'nomfa');
+    await settle();
+    const ready = events.find((e) => e.type === 'document_ready');
+    expect(ready).toMatchObject({ type: 'document_ready' });
+    expect(ready && 'afterMfaMs' in ready).toBe(false);
   });
 
   it('no-MFA path goes straight to documents', async () => {

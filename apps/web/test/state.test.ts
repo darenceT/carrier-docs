@@ -193,8 +193,9 @@ describe('full MFA flow', () => {
     expect(screenOf(s)).toBe('documents');
     expect(s.selectedDocumentId).toBeUndefined();
 
-    s = reducer(s, { type: 'document_ready', documentId: 'd1', elapsedMs: 4321 });
+    s = reducer(s, { type: 'document_ready', documentId: 'd1', elapsedMs: 4321, afterMfaMs: 1234 });
     expect(s.firstDocumentMs).toBe(4321);
+    expect(s.afterMfaMs).toBe(1234);
     expect(s.selectedDocumentId).toBe('d1');
     expect(s.readyDocumentId).toBe('d1');
 

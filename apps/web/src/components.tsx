@@ -192,14 +192,22 @@ export function StatusPanel(props: {
   clientElapsedMs?: number;
   serverElapsedMs?: number;
   firstDocumentMs?: number;
+  afterMfaMs?: number;
 }) {
   return (
     <section className="status" aria-live="polite">
       <h2>Status</h2>
       {props.firstDocumentMs !== undefined ? (
-        <p className="headline" data-testid="headline">
-          First document in {formatSeconds(props.firstDocumentMs)}
-        </p>
+        <>
+          {/* After MFA, counted from the code's submission: the wait for the user isn't ours. */}
+          <p className="headline" data-testid="headline">
+            First document in {formatSeconds(props.afterMfaMs ?? props.firstDocumentMs)}
+            {props.afterMfaMs !== undefined ? ' after your code' : ''}
+          </p>
+          {props.afterMfaMs !== undefined ? (
+            <p data-testid="total">Total from start: {formatSeconds(props.firstDocumentMs)}</p>
+          ) : null}
+        </>
       ) : null}
       <p>
         Now:{' '}

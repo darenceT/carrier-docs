@@ -35,7 +35,12 @@ export function toWireEvent(event: SessionEvent): SessionEvent {
         })),
       };
     case 'document_ready':
-      return { type: 'document_ready', documentId: event.documentId, elapsedMs: event.elapsedMs };
+      return {
+        type: 'document_ready',
+        documentId: event.documentId,
+        elapsedMs: event.elapsedMs,
+        ...(event.afterMfaMs !== undefined && { afterMfaMs: event.afterMfaMs }),
+      };
     case 'failed':
       return {
         type: 'failed',

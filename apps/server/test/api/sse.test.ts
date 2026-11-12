@@ -148,4 +148,10 @@ describe('GET /api/sessions/:id/events (SSE)', () => {
     expect(out).not.toContain('storageState');
     expect(out).toBe(formatSseEvent(ready));
   });
+
+  it('carries the after-code time when there is one', () => {
+    const out = formatSseEvent({ ...ready, afterMfaMs: 1234 });
+    expect(out).toContain('"afterMfaMs":1234');
+    expect(formatSseEvent(ready)).not.toContain('afterMfaMs');
+  });
 });

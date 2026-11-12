@@ -250,6 +250,7 @@ export default function App({ deps }: { deps: Deps }) {
           clientElapsedMs={state.clientElapsedMs}
           serverElapsedMs={state.serverElapsedMs}
           firstDocumentMs={state.firstDocumentMs}
+          afterMfaMs={state.afterMfaMs}
         />
       ) : null}
       <ServerHealth />
