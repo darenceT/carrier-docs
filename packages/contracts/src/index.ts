@@ -167,8 +167,14 @@ export type SessionEvent =
       /** The first document (an ID card when there is one) is cached and can be fetched now. */
       type: 'document_ready';
       documentId: string;
-      /** Milliseconds from session start to this moment: the headline latency number. */
+      /** Milliseconds from session start to this moment, including any wait for the MFA code. */
       elapsedMs: number;
+      /**
+       * Milliseconds from the moment the accepted MFA code was submitted to this moment: the
+       * headline latency number. Absent when no code was asked for (then elapsedMs is the
+       * headline).
+       */
+      afterMfaMs?: number;
     }
   | { type: 'failed'; code: ErrorCode; message: string; retryable: boolean }
   | { type: 'done' };

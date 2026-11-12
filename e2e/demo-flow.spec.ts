@@ -57,6 +57,9 @@ test.describe('Demo carrier, end to end', () => {
     await expect(page.getByText('We sent a code to •••-•••-1234')).toBeVisible();
     await submitCode(page, MFA_CODE);
     await expectDocuments(page);
+    // Counted from the code's submission; the total from the start is shown under it.
+    await expect(page.getByTestId('headline')).toContainText('after your code');
+    await expect(page.getByTestId('total')).toContainText('Total from start');
 
     const src = await page.locator('iframe[title="Auto ID Card"]').getAttribute('src');
     const pdf = await page.request.get(src!);
@@ -73,6 +76,7 @@ test.describe('Demo carrier, end to end', () => {
     await enter(page);
     await startLogin(page, 'demo-nomfa');
     await expectDocuments(page);
+    await expect(page.getByTestId('headline')).not.toContainText('after your code');
     await expect(page.getByRole('heading', { name: 'Verification code' })).toHaveCount(0);
   });
 

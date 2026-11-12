@@ -43,8 +43,10 @@ export interface State {
 
   documents: DocumentMeta[];
   readyDocumentId?: string;
-  /** document_ready.elapsedMs: the headline "First document in X.X s". */
+  /** document_ready.elapsedMs: from session start, including the wait for the code. */
   firstDocumentMs?: number;
+  /** document_ready.afterMfaMs: from the code's submission (the headline, when there was MFA). */
+  afterMfaMs?: number;
   selectedDocumentId?: string;
 
   failure?: { code: ErrorCode; message: string; retryable: boolean };
@@ -142,6 +144,7 @@ function clearSession(state: State): State {
     documents: [],
     readyDocumentId: undefined,
     firstDocumentMs: undefined,
+    afterMfaMs: undefined,
     selectedDocumentId: undefined,
     failure: undefined,
     finished: false,
@@ -240,6 +243,7 @@ export function reducer(state: State, action: Action): State {
         ...state,
         readyDocumentId: action.documentId,
         firstDocumentMs: state.firstDocumentMs ?? action.elapsedMs,
+        afterMfaMs: state.afterMfaMs ?? action.afterMfaMs,
         selectedDocumentId: state.selectedDocumentId ?? action.documentId,
       };
     case 'failed':
