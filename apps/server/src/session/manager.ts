@@ -111,6 +111,13 @@ interface Live<Page> {
   pageReady?: Promise<boolean>;
   /** Prewarm only: taken over by a login. */
   adopted?: boolean;
+  /**
+   * Prewarm only: it opened this browser's saved session and the carrier accepted it. The reuse
+   * key that session belongs to: only a login with the same key may take it over.
+   */
+  savedReuseKey?: string;
+  /** Prewarm only, with savedReuseKey: the documents fetched ahead. Never rejects. */
+  warm?: Promise<Warm | undefined>;
   reuseKey?: string;
   /** Resolved when a slot is granted to this queued login. */
   slotGranted?: Deferred<boolean>;
@@ -137,6 +144,12 @@ interface Live<Page> {
   prewarmed?: boolean;
   /** The outcome was counted in metrics. */
   recorded?: boolean;
+}
+
+/** What a saved-session pre-warm fetched ahead of the login. Held in memory only, never sent. */
+interface Warm {
+  documents: DocumentMeta[];
+  first?: DocumentContent;
 }
 
 /**
@@ -269,6 +282,7 @@ export class SessionManager<Page> implements SessionService {
       if (!isTerminal(s.state)) this.fail(s, 'SESSION_EXPIRED', false);
       this.destroy(s);
     }
+    await this.o.store.deleteByOwner(this.lastOwner(ownerId));
     return this.o.store.deleteByOwner(ownerId);
   }
 
@@ -326,9 +340,37 @@ export class SessionManager<Page> implements SessionService {
 
       const identifier = credentials.username ?? credentials.email ?? '';
       s.reuseKey = this.o.mac('reuse', s.ownerId, s.carrierId, identifier.trim().toLowerCase());
-      const saved = await this.o.store.get(s.reuseKey);
       const browser = this.o.browserFor(s.carrierId);
 
+      // A pre-warm that already opened this browser's saved session (see openPrewarm).
+      if (prewarmed) await prewarmed.pageReady;
+      if (prewarmed?.savedReuseKey !== undefined) {
+        if (prewarmed.savedReuseKey === s.reuseKey && prewarmed.context && prewarmed.page) {
+          // Same browser, carrier and username: take over the session and what it fetched.
+          this.apply(s, { type: 'CHECK_SAVED_SESSION' });
+          const warm = prewarmed.warm;
+          s.context = prewarmed.context;
+          s.page = prewarmed.page;
+          s.fingerprint = prewarmed.fingerprint;
+          prewarmed.context = undefined;
+          prewarmed.page = undefined;
+          this.destroy(prewarmed);
+          this.apply(s, { type: 'FAST_PATH_HIT' });
+          s.fastPath = true;
+          s.prewarmed = true;
+          const fetched = await warm;
+          this.o.logger.info(
+            { sessionId: s.id, carrierId: s.carrierId, documentsReady: fetched !== undefined },
+            'took over a pre-warmed saved session',
+          );
+          return await this.fetchDocuments(s, adapter, fetched);
+        }
+        // Another username: that saved session is not this login's. Close it unused.
+        await this.retirePrewarm(prewarmed);
+        prewarmed = undefined;
+      }
+
+      const saved = await this.o.store.get(s.reuseKey);
       if (saved) {
         // A returning user: the device profile from the saved session, not the pre-warm's.
         if (prewarmed) await this.retirePrewarm(prewarmed);
@@ -342,6 +384,7 @@ export class SessionManager<Page> implements SessionService {
           return await this.fetchDocuments(s, adapter);
         }
         await this.o.store.delete(s.reuseKey);
+        await this.o.store.delete(this.lastKey(s.ownerId, s.carrierId));
         // Same context: a device-trust cookie in it may still spare the user an MFA code.
         this.apply(s, { type: 'FAST_PATH_MISS' });
       } else {
@@ -417,15 +460,20 @@ export class SessionManager<Page> implements SessionService {
     });
   }
 
-  private async fetchDocuments(s: Live<Page>, adapter: CarrierAdapter<Page>): Promise<void> {
+  /** `warm`: the list and first document a saved-session pre-warm already fetched on this page. */
+  private async fetchDocuments(
+    s: Live<Page>,
+    adapter: CarrierAdapter<Page>,
+    warm?: Warm,
+  ): Promise<void> {
     const page = s.page!;
-    const documents = await adapter.listDocuments(page);
+    const documents = warm?.documents ?? (await adapter.listDocuments(page));
     s.documents = documents;
     this.emit(s, { type: 'documents_listed', documents });
     const first = documents[0];
     if (!first) return this.finish(s);
 
-    s.cache.set(first.id, await adapter.fetchDocument(page, first.id));
+    s.cache.set(first.id, warm?.first ?? (await adapter.fetchDocument(page, first.id)));
     this.apply(s, { type: 'DOCUMENT_READY' });
     s.readyDocumentId = first.id;
     const now = this.o.clock.now();
@@ -467,15 +515,20 @@ export class SessionManager<Page> implements SessionService {
     try {
       if (!s.context || !s.reuseKey || !s.fingerprint) return;
       const storageState = await s.context.storageState();
+      const session = {
+        carrierId: s.carrierId,
+        storageState,
+        fingerprint: s.fingerprint,
+        savedAt: this.o.clock.now(),
+      };
+      await this.o.store.put(s.reuseKey, s.ownerId, session, this.o.limits.sessionTtlMs);
+      // A copy under "this browser's last session for this carrier", so the next pre-warm can
+      // open it before the username is typed. Under its own owner tag, so "Forget me" removes
+      // it without counting it as a second saved session.
       await this.o.store.put(
-        s.reuseKey,
-        s.ownerId,
-        {
-          carrierId: s.carrierId,
-          storageState,
-          fingerprint: s.fingerprint,
-          savedAt: this.o.clock.now(),
-        },
+        this.lastKey(s.ownerId, s.carrierId),
+        this.lastOwner(s.ownerId),
+        { ...session, reuseKey: s.reuseKey },
         this.o.limits.sessionTtlMs,
       );
     } catch (err) {
@@ -514,9 +567,61 @@ export class SessionManager<Page> implements SessionService {
 
   // ---------- pre-warm ----------
 
+  private lastKey(ownerId: string, carrierId: string): string {
+    return this.o.mac('last', ownerId, carrierId);
+  }
+
+  /** The store owner tag of a browser's "last session" copies (see save and forget). */
+  private lastOwner(ownerId: string): string {
+    return this.o.mac('last-owner', ownerId);
+  }
+
+  /** Fetch the list and the first document ahead of the login. Never rejects. */
+  private async warmDocuments(
+    s: Live<Page>,
+    adapter: CarrierAdapter<Page>,
+  ): Promise<Warm | undefined> {
+    try {
+      const page = s.page!;
+      const documents = await adapter.listDocuments(page);
+      const first = documents[0];
+      if (!first) return { documents };
+      return { documents, first: await adapter.fetchDocument(page, first.id) };
+    } catch (err) {
+      // The login fetches them itself.
+      this.o.logger.info(
+        { sessionId: s.id, code: codeOf(err), step: stepOf(err) },
+        'prewarm documents failed',
+      );
+      return undefined;
+    }
+  }
+
   private async openPrewarm(s: Live<Page>, adapter: CarrierAdapter<Page>): Promise<boolean> {
     try {
       const browser = this.o.browserFor(s.carrierId);
+      // A returning browser: open its saved session now, while the user is still typing, and
+      // start on the documents. Nothing is released until a login with the same username arrives.
+      const lastKey = this.lastKey(s.ownerId, s.carrierId);
+      const saved = await this.o.store.get(lastKey);
+      if (saved?.reuseKey) {
+        s.fingerprint = this.o.refreshFingerprint(
+          saved.fingerprint,
+          await browser.browserVersion(),
+        );
+        await this.openContext(s, browser, saved.storageState);
+        if (await adapter.isSessionValid(s.page!)) {
+          s.savedReuseKey = saved.reuseKey;
+          s.warm = this.warmDocuments(s, adapter);
+          return true;
+        }
+        // No longer accepted: forget it. The same context goes on to the login form (a
+        // device-trust cookie in it may still spare the user an MFA code).
+        await this.o.store.delete(saved.reuseKey);
+        await this.o.store.delete(lastKey);
+        await adapter.openLogin(s.page!);
+        return true;
+      }
       s.fingerprint = this.o.createFingerprint(await browser.browserVersion());
       await this.openContext(s, browser);
       await adapter.openLogin(s.page!);
