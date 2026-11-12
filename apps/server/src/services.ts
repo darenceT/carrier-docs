@@ -26,6 +26,8 @@ export interface Services {
   sessions: SessionManager<Page>;
   /** GET /api/status: outcome counts, block rate, time to first document. */
   status(): StatusResponse;
+  /** Graceful shutdown, step one: see SessionManager.drain. */
+  drain(timeoutMs: number): Promise<void>;
   /** Loads each configured login page through the anti-bot layer; never logs in. */
   runCanary(): Promise<CanaryReport>;
   close(): Promise<void>;
@@ -107,6 +109,7 @@ export function createServices(config: Config, logger: Logger): Services {
     cipher,
     sessions,
     status: () => metrics.snapshot(sessions.stats()),
+    drain: (timeoutMs) => sessions.drain(timeoutMs),
     runCanary: () =>
       runCanary(targets, {
         browserFor,

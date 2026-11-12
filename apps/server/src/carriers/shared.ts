@@ -1,3 +1,4 @@
+import { isBrowserGone } from '../browser/errors.js';
 import type { DocumentKind, DocumentMeta } from '@carrier-docs/contracts';
 import type { Page } from 'patchright';
 import { AppError } from '../core/errors.js';
@@ -105,6 +106,8 @@ export async function step<T>(what: string, fn: () => Promise<T>): Promise<T> {
     return await fn();
   } catch (err) {
     if (err instanceof AppError) throw err;
+    // A crashed or closed browser is not a changed page: retryable.
+    if (isBrowserGone(err)) throw new AppError('CARRIER_UNAVAILABLE', what);
     throw new AppError('CARRIER_PAGE_CHANGED', what);
   }
 }

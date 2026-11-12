@@ -28,6 +28,7 @@ import {
   type SessionState,
 } from '../core/state-machine.js';
 import type { SessionMetrics } from './metrics.js';
+import { isBrowserGone } from '../browser/errors.js';
 
 // ---------- what the manager needs from the browser side (structural, so tests can fake it) ----------
 
@@ -146,6 +147,8 @@ export class SessionManager<Page> implements SessionService {
   /** Logins waiting for a slot, first in first out. */
   private readonly waiting: Live<Page>[] = [];
   private closed = false;
+  /** Shutting down: no new logins; in-flight ones may finish. */
+  private draining = false;
 
   constructor(private readonly o: SessionManagerOptions<Page>) {
     this.adapters = new Map(o.adapters.map((a) => [a.info.id, a]));
@@ -160,6 +163,7 @@ export class SessionManager<Page> implements SessionService {
   // async, but with no await before the slot decision: two calls can't interleave inside it.
   async prewarm(ownerId: string, carrierId: string): Promise<{ sessionId: string }> {
     const adapter = this.adapterFor(carrierId);
+    if (this.draining) throw new AppError('BUSY');
     // One unused pre-warm per owner: a new pick replaces the old one.
     for (const s of this.sessions.values()) {
       if (s.ownerId === ownerId && this.isUnusedPrewarm(s)) this.discard(s);
@@ -178,6 +182,8 @@ export class SessionManager<Page> implements SessionService {
 
   async start(ownerId: string, input: StartSessionRequest): Promise<{ sessionId: string }> {
     const adapter = this.adapterFor(input.carrierId);
+    // Shutting down: the retry lands on the next instance.
+    if (this.draining) throw new AppError('BUSY');
     const credentials: Credentials = {};
     for (const f of adapter.info.loginFields) {
       const value = input[f];
@@ -264,6 +270,28 @@ export class SessionManager<Page> implements SessionService {
       this.destroy(s);
     }
     return this.o.store.deleteByOwner(ownerId);
+  }
+
+  /**
+   * First step of a graceful shutdown: refuse new logins and pre-warms (BUSY), end queued logins
+   * and unused pre-warms now, and wait up to `timeoutMs` for in-flight logins to finish
+   * (documents fetched, or failed). close() then ends whatever is left.
+   */
+  async drain(timeoutMs: number): Promise<void> {
+    this.draining = true;
+    for (const s of [...this.waiting]) this.fail(s, 'CARRIER_UNAVAILABLE', true);
+    for (const s of [...this.sessions.values()]) if (this.isUnusedPrewarm(s)) this.discard(s);
+    const deadline = this.o.clock.now() + timeoutMs;
+    while (this.inFlight() > 0 && this.o.clock.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+    }
+  }
+
+  /** Logins still running: not yet done or failed. */
+  inFlight(): number {
+    let n = 0;
+    for (const s of this.sessions.values()) if (s.kind === 'login' && !isTerminal(s.state)) n += 1;
+    return n;
   }
 
   /** Close every live session and browser context (graceful shutdown). */
@@ -539,7 +567,7 @@ export class SessionManager<Page> implements SessionService {
   }
 
   private hasFreeSlot(): boolean {
-    return !this.closed && this.slotsInUse() < this.o.limits.maxSessions;
+    return !this.closed && !this.draining && this.slotsInUse() < this.o.limits.maxSessions;
   }
 
   private release(s: Live<Page>): void {
@@ -651,10 +679,23 @@ export class SessionManager<Page> implements SessionService {
   }
 
   private failFromError(s: Live<Page>, err: unknown): void {
-    const code = codeOf(err);
+    let code = codeOf(err);
+    // An adapter checking a dead page sees "wrong page" or a raw error; the real cause is the
+    // browser going away (crash, kill, shutdown), which is retryable.
+    if ((code === 'CARRIER_PAGE_CHANGED' || code === 'INTERNAL') && this.pageGone(s)) {
+      code = 'CARRIER_UNAVAILABLE';
+    }
     if (code === 'INTERNAL') this.o.logger.error({ sessionId: s.id, err }, 'session failed');
-    else this.o.logger.info({ sessionId: s.id, code }, 'session failed');
+    else if (code === 'CARRIER_UNAVAILABLE' && (isBrowserGone(err) || this.pageGone(s))) {
+      this.o.logger.warn({ sessionId: s.id, code }, 'browser went away');
+    } else this.o.logger.info({ sessionId: s.id, code }, 'session failed');
     this.fail(s, code);
+  }
+
+  /** The session's page was closed under it (the browser crashed or was closed). */
+  private pageGone(s: Live<Page>): boolean {
+    const page = s.page as { isClosed?: () => boolean } | undefined;
+    return typeof page?.isClosed === 'function' && page.isClosed();
   }
 
   private emitMfa(s: Live<Page>, hint: string | undefined, rejected: boolean): void {
@@ -730,5 +771,8 @@ export class SessionManager<Page> implements SessionService {
 }
 
 function codeOf(err: unknown): ErrorCode {
-  return isAppError(err) ? err.code : 'INTERNAL';
+  if (isAppError(err)) return err.code;
+  return isBrowserGone(err) ? 'CARRIER_UNAVAILABLE' : 'INTERNAL';
 }
+
+const DRAIN_POLL_MS = 100;
