@@ -86,7 +86,7 @@ const APP_HOME = `<!doctype html><html><body><h1>Account</h1>
 <nav id="nav">__EARLY__</nav>
 <script>
 const token = '${TOKEN}'; // in memory only, like the real app
-fetch('__API__/v1/handshake', { headers: { authorization: token, 'x-prgaccountsessionid': 's1' } })
+fetch('__API__/v1/handshake', { headers: { authorization: token } })
   .finally(() => { nav.innerHTML = '${ID_CARDS_LINK}'; });
 </script></body></html>`;
 
@@ -95,8 +95,8 @@ const idCardsPage = (
   policies: [string, string][],
 ) => `<!doctype html><html><body><h1>ID cards</h1><script>
 for (const [n, key] of ${JSON.stringify(policies)}) {
-  fetch('__API__/v1/policies/' + n + '/document?policyInfoKey=' + key, { method: 'POST',
-    headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 's1', 'x-prg-signature': 'sig:png', api_key: 'app-key', 'content-type': 'application/json' },
+  fetch('__API__/v1/policies/' + n + '/document?view=full&policyInfoKey=' + key, { method: 'POST',
+    headers: { authorization: '${TOKEN}', 'x-prgaccountsessionid': 'sess-1', 'x-pgrclient': 'web', __SIG__ api_key: 'app-key', 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'idCard', mimeType: 'png', format: 'electronic', dpi: '200', policyTerm: '__TERM__', replacementVehicles: [] }) });
 }
 </script></body></html>`;
@@ -107,6 +107,8 @@ let appFetches: [string, string][] = [
 ];
 
 const SPIKE_HANDSHAKE = {
+  // The account session the app then sends as a header on its other requests.
+  account: { sessionId: 'sess-1' },
   policySessions: [
     { policyNumber: '1111', policySessionId: 'a', policyInfoKey: 'WA-AA', term: 'T1' },
     { policyNumber: '2222', policySessionId: 'b', policyInfoKey: 'OR-AA', term: 'T1' },
@@ -146,7 +148,7 @@ let apiBase = '';
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers':
-    'authorization, content-type, x-prgaccountsessionid, x-prg-signature, api_key',
+    'authorization, content-type, x-prgaccountsessionid, x-pgrclient, x-prg-signature, api_key',
   'access-control-allow-methods': 'GET, POST',
 };
 
@@ -226,7 +228,11 @@ function createPortal(): http.Server {
         }
         if (url.pathname === '/app/id-cards') {
           idCardsHits += 1;
-          return html(idCardsPage(appFetches).replace('__TERM__', appPolicyTerm));
+          return html(
+            idCardsPage(appFetches)
+              .replace('__TERM__', appPolicyTerm)
+              .replace('__SIG__', signed ? "'x-prg-signature': 'sig:png'," : ''),
+          );
         }
         return html(APP_HOME.replace('__EARLY__', earlyLink ? ID_CARDS_LINK : ''));
       }
@@ -253,6 +259,13 @@ function createPortal(): http.Server {
           if (!url.searchParams.get('policyInfoKey')) return json(400, { error: 'no key' });
           // The API gateway's key: the real app sends it, and a request without it is refused.
           if (req.headers.api_key !== 'app-key') return json(401, { error: 'no api key' });
+          // What a request built too early lacks: the account session and the page's settings.
+          if (
+            req.headers['x-prgaccountsessionid'] !== 'sess-1' ||
+            url.searchParams.get('view') !== 'full'
+          ) {
+            return json(400, { message: 'Missing account session 123' });
+          }
           if (signed && req.headers['x-prg-signature'] !== `sig:${String(b.mimeType)}`) {
             return json(401, { error: 'bad signature' });
           }
@@ -502,7 +515,12 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect((await learner.listDocuments(first.p)).map((d) => d.mimeType)).toContain('image/png');
       await first.ctx.close();
       const learnedLine = logs.find((l) => l.msg === 'progressive card request learned');
-      expect(learnedLine).toMatchObject({ path: '/policypro/v1/policies/{n}/document' });
+      expect(learnedLine).toMatchObject({
+        path: '/policypro/v1/policies/{n}/document',
+        query: 'view',
+        // Where each further header comes from in a new login; never its value.
+        headers: 'x-pgrclient=fixed x-prgaccountsessionid=handshake:account.sessionId',
+      });
       expect(JSON.parse(String(learnedLine?.body))).toEqual({
         type: 'idCard',
         mimeType: 'png',
@@ -554,6 +572,26 @@ describe.skipIf(!process.env.RUN_BROWSER_TESTS)(
       expect(logs.some((l) => l.msg === 'progressive own card request' && l.status === 401)).toBe(
         true,
       );
+      await second.ctx.close();
+    }, 20_000);
+
+    it('does not send our own request when a header it needs cannot be filled', async () => {
+      signed = false;
+      const learner = makeAdapter(true);
+      const first = await freshLogin(learner);
+      await learner.listDocuments(first.p);
+      await first.ctx.close();
+
+      // This login's handshake has no account session, and the app hasn't sent one yet.
+      handshakeBody = { policySessions: SPIKE_HANDSHAKE.policySessions };
+      logs.length = 0;
+      const second = await freshLogin(learner);
+      const docs = await learner.listDocuments(second.p);
+      expect(docs[0]?.mimeType).toBe('image/png'); // through the ID cards page
+      expect(logs.find((l) => l.msg === 'progressive own card request skipped')).toMatchObject({
+        missing: 'x-prgaccountsessionid',
+      });
+      expect(logs.some((l) => l.msg === 'progressive own card request')).toBe(false);
       await second.ctx.close();
     }, 20_000);
 

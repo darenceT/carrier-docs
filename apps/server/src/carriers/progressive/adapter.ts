@@ -56,6 +56,23 @@ export interface CardRequest {
   body: Record<string, unknown>;
   /** The app's API key header(s). Not a user's secret, but never logged. */
   keys?: Record<string, string>;
+  /** Further query parameters of the app's request (settings only), besides policyInfoKey. */
+  query?: Record<string, string>;
+  /**
+   * The other headers the app's request carries, and where each value comes from in a new login.
+   * Our own request is only sent when every one of them can be filled.
+   */
+  headers?: Record<string, HeaderSource>;
+}
+
+/**
+ * Where a header's value comes from: `path` is its place in this login's handshake answer
+ * (e.g. an account session ID), `fixed` a plain setting seen on the app's request (a word or a
+ * number: client, language). Neither: it must be on a request the app has made in this login.
+ */
+export interface HeaderSource {
+  path?: string;
+  fixed?: string;
 }
 
 const API_KEY = /^api[-_]?key$/i;
@@ -135,6 +152,45 @@ function pathsOf(body: unknown, value: unknown): string[] {
   };
   visit(body, '', 0);
   return [...found];
+}
+
+/**
+ * The value at a path as pathsOf writes it ("policySessions[].id"), in this login's handshake.
+ * In an array, an element that mentions the policy is preferred. Undefined if the path has gone.
+ */
+function valueAt(body: unknown, path: string, policy: Policy): string | undefined {
+  const walk = (v: unknown, parts: string[]): string | undefined => {
+    const [head, ...rest] = parts;
+    if (head === undefined) {
+      return typeof v === 'string' || typeof v === 'number' ? String(v) : undefined;
+    }
+    const each = head.endsWith('[]');
+    const key = each ? head.slice(0, -2) : head;
+    const next =
+      key === ''
+        ? v
+        : v !== null && typeof v === 'object' && !Array.isArray(v)
+          ? (v as Record<string, unknown>)[key]
+          : undefined;
+    if (!each) return walk(next, rest);
+    if (!Array.isArray(next)) return undefined;
+    const mentions = (x: unknown) => JSON.stringify(x ?? null).includes(policy.number);
+    const ordered = [...next.filter(mentions), ...next.filter((x) => !mentions(x))];
+    for (const x of ordered) {
+      const found = walk(x, rest);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  if (path.includes('#') || path === '(root)') return undefined;
+  return walk(body, path.split('.'));
+}
+
+/** Digits masked, shortened: an API's error text for the log, without identifiers. */
+function errorText(json: unknown): string {
+  const o = (json ?? {}) as Record<string, unknown>;
+  const text = [o.message, o.error, o.detail, o.title, o.code].find((v) => typeof v === 'string');
+  return typeof text === 'string' ? text.replace(/[0-9]/g, '9').slice(0, 120) : describeShape(json);
 }
 
 /**
@@ -557,16 +613,43 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
       /\/policies\/[^/]+\/document/,
       '/policies/{n}/document',
     );
+    // Other query parameters must be plain settings too, or the request can't be rebuilt.
+    const query: Record<string, string> = {};
+    for (const [k, v] of new URL(url).searchParams) {
+      if (k === 'policyInfoKey') continue;
+      if (generic(v)) query[k] = v;
+      else specific.push(`?${k}`);
+    }
     if (specific.length > 0 || !path.includes('{n}')) {
       this.log('progressive card request not learned', { fields: specific.sort().join(' ') });
       return;
     }
+    // Where each further header's value comes from in a new login: this login's handshake
+    // answer (an account session ID, say), a plain setting, or a request the app makes.
+    const sources: Record<string, HeaderSource> = {};
+    for (const [name, value] of Object.entries(headers)) {
+      if (/^(authorization|accept|content-type)$/i.test(name) || API_KEY.test(name)) continue;
+      const at = pathsOf(w.handshakeBody, value).find((x) => !x.includes('#') && x !== '(root)');
+      sources[name] = at ? { path: at } : generic(value) ? { fixed: value } : {};
+    }
     // The app's API key goes with it: the gateway's key, the same for every visitor, and not
     // necessarily on the request our token is read from. Memory only, never logged.
     const keys = Object.fromEntries(Object.entries(headers).filter(([k]) => API_KEY.test(k)));
-    this.learned = { path, body: { ...body }, keys };
-    // Every value passed the check above: settings, no identifiers.
-    this.log('progressive card request learned', { path, body: JSON.stringify(body) });
+    this.learned = { path, body: { ...body }, keys, query, headers: sources };
+    // Every value passed the check above: settings, no identifiers. For headers, only where the
+    // value comes from: a handshake path, "fixed", or "app" (a request the app must have made).
+    this.log('progressive card request learned', {
+      path,
+      body: JSON.stringify(body),
+      query: Object.keys(query).sort().join(' '),
+      headers: Object.entries(sources)
+        .map(
+          ([n, src]) =>
+            `${n}=${src.path ? `handshake:${src.path}` : src.fixed !== undefined ? 'fixed' : 'app'}`,
+        )
+        .sort()
+        .join(' '),
+    });
   }
 
   /**
@@ -579,16 +662,36 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (have !== undefined) return have;
     const learned = this.learned;
     if (!learned) return undefined;
-    const headers = await this.until(page, () => w.apiHeaders, 2_000);
-    if (!headers) return undefined;
+    // Every header the app's request carries must be fillable for this login: from the handshake
+    // answer, a plain setting, or a request the app has made. Never send an incomplete request:
+    // a refused one cost 2.4 s before the fallback even started.
+    const needed = Object.entries(learned.headers ?? {});
+    let missing: string[] = [];
+    const complete = (): Record<string, string> | undefined => {
+      const h: Record<string, string> = { ...w.apiHeaders };
+      for (const [name, src] of needed) {
+        const fromHandshake = src.path ? valueAt(w.handshakeBody, src.path, policy) : undefined;
+        if (fromHandshake !== undefined) h[name] = fromHandshake;
+        else if (h[name] === undefined && src.fixed !== undefined) h[name] = src.fixed;
+      }
+      missing = ['authorization', ...needed.map(([n]) => n)].filter((n) => h[n] === undefined);
+      return missing.length === 0 ? h : undefined;
+    };
+    const headers = await this.until(page, complete, 1_500);
+    if (!headers) {
+      this.log('progressive own card request skipped', { missing: missing.sort().join(' ') });
+      return undefined;
+    }
     const t = timer();
     const url = new URL(
       learned.path.replace('{n}', encodeURIComponent(policy.number)),
       this.urls.api,
     );
+    for (const [k, v] of Object.entries(learned.query ?? {})) url.searchParams.set(k, v);
     url.searchParams.set('policyInfoKey', policy.key);
     let status = 0;
     let files = 0;
+    let error = '';
     try {
       const res = await this.postDocument(
         page,
@@ -597,6 +700,7 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
         JSON.stringify({ ...learned.body, mimeType: 'pdf' }),
       );
       status = res.status;
+      if (status < 200 || status >= 300) error = errorText(res.json);
       const documents = (res.json as { documents?: unknown } | null)?.documents;
       files = cardFiles(documents).length;
       if (status >= 200 && status < 300 && files > 0) {
@@ -608,7 +712,12 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     } catch {
       return undefined;
     } finally {
-      this.log('progressive own card request', { status, files, ms: t() });
+      this.log('progressive own card request', {
+        status,
+        files,
+        ms: t(),
+        ...(error ? { error } : {}),
+      });
     }
   }
 
@@ -689,7 +798,8 @@ export class ProgressiveAdapter implements CarrierAdapter<Page> {
     if (!req.url().startsWith(this.urls.api)) return;
     const all = await req.allHeaders().catch(() => ({}) as Record<string, string>);
     const headers = Object.fromEntries(Object.entries(all).filter(([k]) => KEEP_HEADER.test(k)));
-    if (headers.authorization) w.apiHeaders = headers;
+    // The union over the app's requests: later ones carry headers the first ones don't yet.
+    if (headers.authorization) w.apiHeaders = { ...w.apiHeaders, ...headers };
     // The app's own ID-card request: the template for ours (its field values aren't documented).
     if (
       !w.ours.has(`${req.url()}\n${req.postData() ?? ''}`) &&
